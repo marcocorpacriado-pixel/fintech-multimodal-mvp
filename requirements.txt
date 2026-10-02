@@ -1,0 +1,13 @@
+﻿# Core
+pandas
+numpy
+pyarrow
+
+# SEC filings
+edgartools==5.21.1
+
+# Pendiente de añadir por módulos:
+# - FastAPI, uvicorn (Marco)
+# - streamlit (Marco)
+# - openai-whisper (Cristian)
+# - matplotlib, plotly (Marco)

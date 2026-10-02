@@ -1,0 +1,15 @@
+# Datos (no subir al repo, son muy pesados)
+data/raw/
+data/processed/
+*.pdf
+*.mp3
+*.wav
+
+# Entornos y cachés
+.venv/
+__pycache__/
+*.pyc
+.env
+
+# VS Code
+.vscode/
