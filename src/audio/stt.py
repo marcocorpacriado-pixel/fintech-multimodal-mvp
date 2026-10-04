@@ -32,6 +32,30 @@ DEFAULT_MODEL = "whisper-large-v3-turbo"
 SUPPORTED_FORMATS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm", ".mp4", ".mpga"}
 MAX_FILE_SIZE_MB = 25  # Límite Groq (free tier). Dividir antes si supera.
 
+# Groq Whisper devuelve el idioma como NOMBRE COMPLETO en inglés
+# ("english", "spanish", ...), no como ISO-639-1. Normalizamos aquí para que
+# el contrato de Transcription siempre exponga el código ISO.
+_LANG_NAME_TO_ISO: dict[str, str] = {
+    "english": "en", "spanish": "es", "french": "fr", "german": "de",
+    "italian": "it", "portuguese": "pt", "dutch": "nl", "russian": "ru",
+    "polish": "pl", "turkish": "tr", "arabic": "ar", "hindi": "hi",
+    "japanese": "ja", "chinese": "zh", "korean": "ko", "catalan": "ca",
+    "galician": "gl", "basque": "eu", "swedish": "sv", "norwegian": "no",
+    "danish": "da", "finnish": "fi", "czech": "cs", "greek": "el",
+    "hebrew": "he", "ukrainian": "uk", "romanian": "ro", "hungarian": "hu",
+    "vietnamese": "vi", "thai": "th", "indonesian": "id", "malay": "ms",
+}
+
+
+def _normalize_language(raw: str | None) -> str:
+    """Devuelve siempre un código ISO-639-1 en minúsculas o 'unknown'."""
+    if not raw:
+        return "unknown"
+    r = raw.strip().lower()
+    if len(r) <= 3:  # ya parece un código ('en', 'es', 'eng')
+        return r[:2]
+    return _LANG_NAME_TO_ISO.get(r, r[:2])  # fallback: primeras 2 letras
+
 
 # ---- Modelos de datos -------------------------------------------------------
 
@@ -141,7 +165,7 @@ def transcribe(
         ]
         return Transcription(
             text=response.text.strip(),
-            language=getattr(response, "language", language or "unknown"),
+            language=_normalize_language(getattr(response, "language", language)),
             duration=getattr(response, "duration", 0.0),
             segments=segments,
         )
@@ -150,7 +174,7 @@ def transcribe(
     text = response if isinstance(response, str) else response.text
     return Transcription(
         text=text.strip(),
-        language=language or "unknown",
+        language=_normalize_language(language),
         duration=0.0,
         segments=[],
     )
