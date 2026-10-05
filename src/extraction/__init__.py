@@ -5,6 +5,8 @@ from .schemas import (
     Evidence,
     FinancialAnalysisResult,
     FinancialMetric,
+    LoadedDocument,
+    LoadedDocumentMetadata,
     ManagementOutlook,
 )
 
@@ -13,5 +15,7 @@ __all__ = [
     "Evidence",
     "FinancialAnalysisResult",
     "FinancialMetric",
+    "LoadedDocument",
+    "LoadedDocumentMetadata",
     "ManagementOutlook",
 ]

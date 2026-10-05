@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 FilingType = Literal["10-K", "10-Q", "10-K/A", "10-Q/A"]
@@ -77,6 +77,58 @@ class FinancialAnalysisResult(ExtractionSchema):
     executive_summary: str = Field(min_length=1)
 
 
+class LoadedDocumentMetadata(ExtractionSchema):
+    """Deterministic file metadata retained for document traceability."""
+
+    file_name: str = Field(min_length=1)
+    file_extension: str = Field(min_length=1, pattern=r"^\.")
+    encoding: str = Field(min_length=1)
+    byte_size: int = Field(ge=0)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class LoadedDocument(ExtractionSchema):
+    """A normalized source document ready for the chunking stage.
+
+    Unlike the other contracts, this model preserves leading and trailing
+    whitespace in ``text``. Whitespace is inspected only to reject documents
+    without narrative content.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=False,
+        validate_assignment=True,
+    )
+
+    ticker: str = Field(min_length=1)
+    filing_type: FilingType
+    period: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    source_id: str = Field(min_length=1)
+    source_type: SourceType
+    metadata: LoadedDocumentMetadata
+
+    @field_validator("ticker", "period", "source_id")
+    @classmethod
+    def normalize_identifier_text(cls, value: str) -> str:
+        """Trim identifying values while rejecting whitespace-only strings."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must contain non-whitespace characters")
+        return normalized
+
+    @field_validator("text")
+    @classmethod
+    def validate_narrative_text(cls, value: str) -> str:
+        """Reject blank documents without altering their narrative text."""
+
+        if not value.strip():
+            raise ValueError("text must contain non-whitespace characters")
+        return value
+
+
 class DocumentChunk(ExtractionSchema):
     """A traceable text fragment shared by chunking and retrieval stages."""
 
@@ -109,6 +161,8 @@ __all__ = [
     "FilingType",
     "FinancialAnalysisResult",
     "FinancialMetric",
+    "LoadedDocument",
+    "LoadedDocumentMetadata",
     "ManagementOutlook",
     "Sentiment",
     "SourceType",
