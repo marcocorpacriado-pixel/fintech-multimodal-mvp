@@ -18,6 +18,7 @@ FilingType = Literal["10-K", "10-Q", "10-K/A", "10-Q/A"]
 SourceType = Literal["filing", "xbrl", "earnings_call", "unknown"]
 Sentiment = Literal["positive", "neutral", "negative", "mixed", "unknown"]
 XBRLPeriodType = Literal["instant", "duration"]
+ComparisonType = Literal["QoQ", "YoY", "YoY_YTD"]
 
 
 class ExtractionSchema(BaseModel):
@@ -46,6 +47,10 @@ class FinancialMetric(ExtractionSchema):
         min_length=1,
         description="Unit or currency associated with the metric.",
     )
+    comparison_type: ComparisonType | None = None
+    current_period: str | None = Field(default=None, min_length=1)
+    previous_period: str | None = Field(default=None, min_length=1)
+    source_ids: list[str] = Field(default_factory=list)
 
 
 class Evidence(ExtractionSchema):
@@ -229,6 +234,7 @@ class NormalizedXBRLFact(ExtractionSchema):
 
 
 __all__ = [
+    "ComparisonType",
     "DocumentChunk",
     "Evidence",
     "FilingType",
