@@ -8,6 +8,7 @@ from .schemas import (
     LoadedDocument,
     LoadedDocumentMetadata,
     ManagementOutlook,
+    NormalizedXBRLFact,
     RetrievalResult,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "LoadedDocument",
     "LoadedDocumentMetadata",
     "ManagementOutlook",
+    "NormalizedXBRLFact",
     "RetrievalResult",
 ]

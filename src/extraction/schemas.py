@@ -8,6 +8,7 @@ model calls belong in their respective modules.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -16,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 FilingType = Literal["10-K", "10-Q", "10-K/A", "10-Q/A"]
 SourceType = Literal["filing", "xbrl", "earnings_call", "unknown"]
 Sentiment = Literal["positive", "neutral", "negative", "mixed", "unknown"]
+XBRLPeriodType = Literal["instant", "duration"]
 
 
 class ExtractionSchema(BaseModel):
@@ -163,6 +165,69 @@ class RetrievalResult(ExtractionSchema):
     rank: int = Field(ge=1)
 
 
+class NormalizedXBRLFact(ExtractionSchema):
+    """Canonical long-form representation of one numeric XBRL fact."""
+
+    ticker: str = Field(min_length=1)
+    form: FilingType
+    accession: str = Field(min_length=1)
+    filing_date: date
+    fact_id: str | None = Field(default=None, min_length=1)
+    context_ref: str = Field(min_length=1)
+    source_id: str = Field(min_length=1)
+    concept: str = Field(min_length=1)
+    standard_concept: str | None = Field(default=None, min_length=1)
+    label: str | None = Field(default=None, min_length=1)
+    numeric_value: float = Field(allow_inf_nan=False)
+    unit: str = Field(min_length=1)
+    period_type: XBRLPeriodType
+    period_start: date | None = None
+    period_end: date | None = None
+    period_instant: date | None = None
+    fiscal_year: int | None = None
+    fiscal_period: str | None = Field(default=None, min_length=1)
+    dimensions: dict[str, str] = Field(default_factory=dict)
+    statement_type: str | None = Field(default=None, min_length=1)
+    amended: bool = False
+
+    @field_validator("dimensions")
+    @classmethod
+    def validate_dimensions(cls, value: dict[str, str]) -> dict[str, str]:
+        """Reject blank axes or members and keep deterministic key ordering."""
+
+        normalized: dict[str, str] = {}
+        for axis, member in value.items():
+            clean_axis = axis.strip()
+            clean_member = member.strip()
+            if not clean_axis or not clean_member:
+                raise ValueError("dimension axes and members must be non-empty")
+            normalized[clean_axis] = clean_member
+        return dict(sorted(normalized.items()))
+
+    @model_validator(mode="after")
+    def validate_period_fields(self) -> Self:
+        """Enforce mutually exclusive instant and duration period metadata."""
+
+        if self.period_type == "instant":
+            if self.period_instant is None:
+                raise ValueError("period_instant is required for instant facts")
+            if self.period_start is not None or self.period_end is not None:
+                raise ValueError(
+                    "period_start and period_end must be None for instant facts"
+                )
+            return self
+
+        if self.period_start is None or self.period_end is None:
+            raise ValueError(
+                "period_start and period_end are required for duration facts"
+            )
+        if self.period_instant is not None:
+            raise ValueError("period_instant must be None for duration facts")
+        if self.period_start > self.period_end:
+            raise ValueError("period_start must be before or equal to period_end")
+        return self
+
+
 __all__ = [
     "DocumentChunk",
     "Evidence",
@@ -172,7 +237,9 @@ __all__ = [
     "LoadedDocument",
     "LoadedDocumentMetadata",
     "ManagementOutlook",
+    "NormalizedXBRLFact",
     "RetrievalResult",
     "Sentiment",
     "SourceType",
+    "XBRLPeriodType",
 ]
