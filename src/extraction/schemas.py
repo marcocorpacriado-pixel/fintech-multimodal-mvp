@@ -68,6 +68,7 @@ class ManagementOutlook(ExtractionSchema):
 
     summary: str = Field(min_length=1)
     sentiment: Sentiment = "unknown"
+    source_ids: list[str] = Field(default_factory=list)
 
 
 class FinancialAnalysisResult(ExtractionSchema):
