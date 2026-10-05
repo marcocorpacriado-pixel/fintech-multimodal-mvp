@@ -155,6 +155,14 @@ class DocumentChunk(ExtractionSchema):
         return self
 
 
+class RetrievalResult(ExtractionSchema):
+    """A ranked lexical retrieval hit with its source chunk."""
+
+    chunk: DocumentChunk
+    score: float = Field(allow_inf_nan=False)
+    rank: int = Field(ge=1)
+
+
 __all__ = [
     "DocumentChunk",
     "Evidence",
@@ -164,6 +172,7 @@ __all__ = [
     "LoadedDocument",
     "LoadedDocumentMetadata",
     "ManagementOutlook",
+    "RetrievalResult",
     "Sentiment",
     "SourceType",
 ]
