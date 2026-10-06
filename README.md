@@ -45,7 +45,32 @@ fintech-multimodal-mvp/
 
 ## 🚀 Instalación y uso
 
-_En construcción._
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+Arranca la API y el dashboard en dos terminales (ambas desde la raíz del repo y con el entorno activado):
+
+```powershell
+# Terminal 1 — API FastAPI (docs en http://localhost:8000/docs)
+uvicorn src.api.main:app --reload --port 8000
+
+# Terminal 2 — Dashboard Streamlit (http://localhost:8501)
+streamlit run app/streamlit_app.py
+```
+
+- **Modo demo** (por defecto): la API devuelve un fixture sintético (`src/api/demo_fixture.json`). No necesita claves ni red.
+- **Modo real**: requiere en `.env` las variables `EDGAR_IDENTITY` (`"Nombre email@dominio"`), `OPENROUTER_API_KEY` y `OPENROUTER_MODEL`. La fecha que se pide es la *filing date* del 10-Q/10-K en la SEC.
+- **Audio**: la primera síntesis descarga el modelo Kokoro (~350 MB) en `KOKORO_MODEL_DIR` (por defecto `~/.cache/kokoro`).
+- Si la API no está en `http://localhost:8000`, define `API_URL` antes de lanzar Streamlit.
+
+Tests:
+
+```powershell
+python -m pytest -q
+```
 
 ## 📊 Corpus de datos
 
