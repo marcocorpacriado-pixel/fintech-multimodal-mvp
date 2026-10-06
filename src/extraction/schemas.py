@@ -9,7 +9,7 @@ model calls belong in their respective modules.
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -275,7 +275,34 @@ class VerificationReport(ExtractionSchema):
         return self
 
 
+class AnalysisPipelineResult(ExtractionSchema):
+    """Auditable output of the end-to-end extraction and analysis pipeline."""
+
+    analysis: FinancialAnalysisResult
+    verification: VerificationReport
+    queries: list[Annotated[str, Field(min_length=1)]] = Field(
+        default_factory=list
+    )
+    retrieval_count: int = Field(ge=0)
+    retrieved_source_ids: list[Annotated[str, Field(min_length=1)]] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def validate_retrieval_metadata(self) -> Self:
+        """Keep the compact retrieval audit metadata internally consistent."""
+
+        if self.retrieval_count != len(self.retrieved_source_ids):
+            raise ValueError(
+                "retrieval_count must equal the number of retrieved_source_ids"
+            )
+        if len(set(self.retrieved_source_ids)) != len(self.retrieved_source_ids):
+            raise ValueError("retrieved_source_ids must be unique")
+        return self
+
+
 __all__ = [
+    "AnalysisPipelineResult",
     "ComparisonType",
     "DocumentChunk",
     "Evidence",

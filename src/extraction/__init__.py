@@ -12,12 +12,18 @@ from .financial_analyzer import (
     classify_duration,
 )
 from .pipeline import (
+    DEFAULT_FINANCIAL_QUERIES,
     FINANCIAL_ANALYST_SYSTEM_PROMPT,
     GroundedAnalysisError,
     LLMClient,
+    PipelineAnalysisError,
+    PipelineError,
+    PipelineInputError,
+    PipelineVerificationError,
     analyze_financials,
     build_analysis_prompt,
     qualitative_analysis_json_schema,
+    run_analysis_pipeline,
 )
 from .openrouter_client import (
     LLMConfigurationError,
@@ -28,6 +34,7 @@ from .openrouter_client import (
     OpenRouterLLMClient,
 )
 from .schemas import (
+    AnalysisPipelineResult,
     ComparisonType,
     DocumentChunk,
     Evidence,
@@ -43,9 +50,11 @@ from .schemas import (
 )
 
 __all__ = [
+    "AnalysisPipelineResult",
     "AnalysisVerificationError",
     "ComparisonType",
     "DocumentChunk",
+    "DEFAULT_FINANCIAL_QUERIES",
     "Evidence",
     "FINANCIAL_ANALYST_SYSTEM_PROMPT",
     "FinancialAnalysisResult",
@@ -64,6 +73,10 @@ __all__ = [
     "METRIC_REGISTRY",
     "NormalizedXBRLFact",
     "OpenRouterLLMClient",
+    "PipelineAnalysisError",
+    "PipelineError",
+    "PipelineInputError",
+    "PipelineVerificationError",
     "RetrievalResult",
     "VerificationIssue",
     "VerificationReport",
@@ -73,5 +86,6 @@ __all__ = [
     "build_financial_metrics",
     "classify_duration",
     "qualitative_analysis_json_schema",
+    "run_analysis_pipeline",
     "verify_analysis",
 ]
