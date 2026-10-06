@@ -48,6 +48,19 @@ from .schemas import (
     VerificationIssue,
     VerificationReport,
 )
+from .sec_ingestion import (
+    DEFAULT_SEC_INGESTION_DIR,
+    SECAnalysisInputs,
+    SECCompanyFactory,
+    SECFilingNotFoundError,
+    SECIdentityError,
+    SECIngestionError,
+    SECNarrativeExtractionError,
+    SECPreviousFilingNotFoundError,
+    SECXBRLUnavailableError,
+    SEC_IDENTITY_ENV_VAR,
+    prepare_sec_analysis_inputs,
+)
 
 __all__ = [
     "AnalysisPipelineResult",
@@ -55,6 +68,7 @@ __all__ = [
     "ComparisonType",
     "DocumentChunk",
     "DEFAULT_FINANCIAL_QUERIES",
+    "DEFAULT_SEC_INGESTION_DIR",
     "Evidence",
     "FINANCIAL_ANALYST_SYSTEM_PROMPT",
     "FinancialAnalysisResult",
@@ -78,6 +92,15 @@ __all__ = [
     "PipelineInputError",
     "PipelineVerificationError",
     "RetrievalResult",
+    "SECAnalysisInputs",
+    "SECCompanyFactory",
+    "SECFilingNotFoundError",
+    "SECIdentityError",
+    "SECIngestionError",
+    "SECNarrativeExtractionError",
+    "SECPreviousFilingNotFoundError",
+    "SECXBRLUnavailableError",
+    "SEC_IDENTITY_ENV_VAR",
     "VerificationIssue",
     "VerificationReport",
     "analyze_financials",
@@ -86,6 +109,7 @@ __all__ = [
     "build_financial_metrics",
     "classify_duration",
     "qualitative_analysis_json_schema",
+    "prepare_sec_analysis_inputs",
     "run_analysis_pipeline",
     "verify_analysis",
 ]
