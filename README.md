@@ -12,10 +12,9 @@ visualización y síntesis de voz.
 
 - Extracción y análisis SEC/XBRL: implementados y probados.
 - Contrato de integración serializable para API/UI y TTS: implementado.
-- Audio STT/TTS: disponible en `feature/audio_integration`, pendiente de
-  integración final y reconciliación de dependencias.
-- FastAPI, Streamlit y visualización: responsabilidad de Marco; su rama final
-  todavía no está publicada en este repositorio.
+- Audio STT/TTS: integrado mediante Groq Whisper y Kokoro ONNX.
+- FastAPI, Streamlit y visualización Plotly: integrados sobre el contrato
+  `AnalysisHandoff`.
 
 ## Arquitectura
 
@@ -40,10 +39,9 @@ flowchart TD
     STT -. future transcript adapter .-> BM25
 ```
 
-El flujo SEC/XBRL hasta `AnalysisHandoff` está integrado. La conexión con la
-UI se hará cuando Marco publique su rama. TTS/STT vive en la rama de Cristian;
-la ingesta de transcripts como fuente `earnings_call` es una extensión futura,
-no una capacidad integrada actualmente.
+El flujo SEC/XBRL hasta `AnalysisHandoff`, la API, el dashboard y TTS están
+integrados. La ingesta de transcripts como fuente `earnings_call` sigue siendo
+una extensión futura.
 
 ## Responsabilidades
 
@@ -111,13 +109,30 @@ python -m pip install -r requirements.txt
 python -m pytest -q
 ```
 
-> **TODO de integración de audio:** el `requirements.txt` actual cubre el
-> módulo de Dani. Las dependencias de audio se incorporarán desde
-> `feature/audio_integration` durante la integración final, después de que
-> Cristian publique su actualización.
-
 Los datos descargados, `.env`, audios, modelos y artefactos procesados no deben
 versionarse.
+
+### Arranque de API y dashboard
+
+Con el entorno activado, usa dos terminales desde la raíz del repositorio:
+
+```powershell
+# Terminal 1 — FastAPI; OpenAPI en http://localhost:8000/docs
+uvicorn src.api.main:app --reload --port 8000
+
+# Terminal 2 — Streamlit en http://localhost:8501
+streamlit run app/streamlit_app.py
+```
+
+La UI usa `http://localhost:8000` por defecto. Para otro backend, configura
+`API_URL` antes de arrancar Streamlit.
+
+- **Modo demo (por defecto):** la API carga el fixture sintético
+  `src/api/demo_fixture.json`; no consulta SEC ni llama a un LLM.
+- **Modo real:** requiere `EDGAR_IDENTITY`, `OPENROUTER_API_KEY` y
+  `OPENROUTER_MODEL`. La fecha solicitada es la filing date SEC.
+- **Audio:** la primera síntesis puede descargar el modelo Kokoro en
+  `KOKORO_MODEL_DIR` y tardar más que las siguientes.
 
 ## Configuración
 
@@ -184,12 +199,12 @@ payload = handoff.model_dump(mode="json")
 ```
 
 El pipeline acepta cualquier implementación del protocolo `LLMClient`. Los
-tests offline inyectan dobles deterministas; el repositorio no expone todavía
-un runner demo público, por lo que no se documenta una API ficticia.
+tests offline inyectan dobles deterministas; la aplicación integrada ofrece un
+modo demo público basado en una fixture sintética y explícitamente etiquetada.
 
 ## Audio
 
-La rama `feature/audio_integration` expone:
+El módulo `src.audio` expone:
 
 ```python
 from src.audio import list_voices, synthesize, transcribe
@@ -229,7 +244,8 @@ deprecaciones internas de edgartools 5.21.1 y no fallos funcionales.
 - Earnings calls superiores a 25 MB necesitan preprocesamiento para STT.
 - La propagación completa de `source_type="earnings_call"` hasta retrieval es
   una evolución futura.
-- La UI/API/visualización de Marco está pendiente de publicación e integración.
+- La ingesta de transcripts de earnings calls todavía no está conectada al
+  pipeline de retrieval.
 
 ## Documentación de entrega
 
