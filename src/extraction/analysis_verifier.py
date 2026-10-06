@@ -18,6 +18,9 @@ from .schemas import (
 )
 
 
+# Half-unit tolerance for one displayed decimal. Percentage matching scales
+# this value by the actual precision of each mention rather than applying it
+# as a global threshold.
 PERCENTAGE_TOLERANCE_POINTS = 0.05
 SUMMARY_MIN_WORDS = 80
 SUMMARY_PREFERRED_MAX_WORDS = 200
@@ -404,7 +407,7 @@ def _verify_narrative_numbers(
                 continue
             if _mention_matches_metrics(mention, target.text, metrics, metric):
                 continue
-            if metric is None and _mention_matches_grounding(
+            if _mention_matches_grounding(
                 mention,
                 target.grounding_texts,
             ):
@@ -427,14 +430,6 @@ def _narrative_targets(
     analysis: FinancialAnalysisResult,
     catalog: dict[str, RetrievalResult],
 ) -> list[_TextTarget]:
-    cited_evidence = tuple(
-        finding.evidence
-        for finding in (
-            *analysis.key_positive_developments,
-            *analysis.key_risks,
-        )
-        if finding.evidence
-    )
     outlook_sources = tuple(
         catalog[source_id].chunk.text
         for source_id in analysis.management_outlook.source_ids
@@ -444,7 +439,6 @@ def _narrative_targets(
         _TextTarget(
             text=analysis.executive_summary,
             field="executive_summary",
-            grounding_texts=(*cited_evidence, *outlook_sources),
         ),
         _TextTarget(
             text=analysis.management_outlook.summary,
@@ -488,12 +482,18 @@ def _extract_numeric_mentions(text: str) -> list[_NumericMention]:
         value = float(number_text) * scale
         if sign == "-":
             value = -value
+        is_percentage = match.group("percent") is not None
+        rounding_tolerance = (
+            PERCENTAGE_TOLERANCE_POINTS * (10 ** (1 - decimals))
+            if is_percentage
+            else 0.5 * (10**-decimals) * scale
+        )
         mentions.append(
             _NumericMention(
                 raw=match.group(0).strip(),
                 value=value,
-                is_percentage=match.group("percent") is not None,
-                rounding_tolerance=0.5 * (10**-decimals) * scale,
+                is_percentage=is_percentage,
+                rounding_tolerance=rounding_tolerance,
                 has_currency=match.group("currency") is not None,
                 has_magnitude=magnitude is not None,
                 explicit_sign=sign,
@@ -566,7 +566,11 @@ def _mention_matches_metrics(
         observed = _signed_percentage(mention, text)
         return any(
             metric.change_pct is not None
-            and abs(observed - metric.change_pct) <= PERCENTAGE_TOLERANCE_POINTS
+            and _within_rounding_precision(
+                observed,
+                metric.change_pct,
+                mention.rounding_tolerance,
+            )
             for metric in candidates
         )
     return any(
@@ -581,20 +585,55 @@ def _mention_matches_grounding(
     grounding_texts: Iterable[str],
 ) -> bool:
     for text in grounding_texts:
+        date_spans = _nonfinancial_date_spans(text)
         for grounded in _extract_numeric_mentions(text):
-            if mention.is_percentage != grounded.is_percentage:
+            if _is_nonfinancial_number(
+                text,
+                grounded,
+                date_spans=date_spans,
+            ):
                 continue
             if mention.is_percentage:
-                if abs(abs(mention.value) - abs(grounded.value)) <= (
-                    PERCENTAGE_TOLERANCE_POINTS
+                if not (
+                    grounded.is_percentage
+                    or _has_percentage_context(text, grounded)
+                ):
+                    continue
+                if _same_grounded_value(
+                    abs(mention.value),
+                    abs(grounded.value),
                 ):
                     return True
-            elif abs(mention.value - grounded.value) <= max(
-                mention.rounding_tolerance,
-                grounded.rounding_tolerance,
-            ):
+            elif grounded.is_percentage:
+                continue
+            elif _same_grounded_value(mention.value, grounded.value):
                 return True
     return False
+
+
+def _within_rounding_precision(
+    observed: float,
+    canonical: float,
+    rounding_tolerance: float,
+) -> bool:
+    """Match a canonical value at the precision displayed by the model."""
+
+    floating_epsilon = max(1e-12, abs(canonical) * 1e-12)
+    return abs(observed - canonical) <= rounding_tolerance + floating_epsilon
+
+
+def _same_grounded_value(first: float, second: float) -> bool:
+    """Compare cited values without allowing human-rounding substitutions."""
+
+    floating_epsilon = max(1e-9, abs(first) * 1e-12, abs(second) * 1e-12)
+    return abs(first - second) <= floating_epsilon
+
+
+def _has_percentage_context(text: str, mention: _NumericMention) -> bool:
+    """Recognize percentages whose symbol was lost in a rendered table."""
+
+    local = text[max(0, mention.start - 40) : min(len(text), mention.end + 20)]
+    return bool(re.search(r"\bpercent(?:age)?\b", local, re.IGNORECASE))
 
 
 def _signed_percentage(mention: _NumericMention, text: str) -> float:

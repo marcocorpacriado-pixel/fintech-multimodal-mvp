@@ -34,6 +34,31 @@ REAL_AAPL_SUMMARY = (
     "rose 43.1% to $117.0 billion, while capital expenditures declined 28.2% "
     "to $6.8 billion."
 )
+LATEST_OPENROUTER_SUMMARY = (
+    "Apple Inc. reported its fiscal third quarter 2026 results for the period "
+    "ending June 27, 2026. Revenue declined 1.6% sequentially to $109.4 "
+    "billion, while net income and diluted EPS edged slightly higher. "
+    "Year-to-date operating cash flow surged 43% to $117 billion, and capital "
+    "expenditures fell 28%. The company saw strong year-over-year sales growth "
+    "across all geographic segments, with total net sales up 16% from the "
+    "prior year. Gross margin improved to 50.1%. However, management highlighted "
+    "intensifying supply constraints for key components and ongoing tariff "
+    "uncertainties, which are expected to materially impact future results. "
+    "The outlook is negative due to these headwinds."
+)
+SANITIZED_OPENROUTER_SUMMARY = (
+    "Apple Inc. reported its fiscal third quarter 2026 results for the period "
+    "ending June 27, 2026. Revenue declined 1.6% sequentially to $109.4 "
+    "billion, while net income and diluted EPS edged slightly higher. "
+    "Year-to-date operating cash flow surged 43% to $117 billion, and capital "
+    "expenditures fell 28%. The company also reported broad geographic sales "
+    "growth and improved gross margin. However, management highlighted "
+    "intensifying supply constraints for key components and ongoing tariff "
+    "uncertainties, which are expected to materially impact future results. "
+    "The outlook is negative due to these headwinds."
+)
+GROSS_MARGIN_EVIDENCE = "Total gross margin percentage 50.1 46.5"
+SALES_GROWTH_EVIDENCE = "Total net sales $ 109,417 94,036 16%"
 
 
 def revenue_metric(**overrides: object) -> FinancialMetric:
@@ -165,6 +190,43 @@ def retrieval_results() -> list[RetrievalResult]:
         retrieval_result("chunk-positive", "ITEM_7", POSITIVE_TEXT, 1),
         retrieval_result("chunk-risk", "ITEM_1A", RISK_TEXT, 2),
         retrieval_result("chunk-outlook", "ITEM_7", OUTLOOK_TEXT, 3),
+    ]
+
+
+def real_numeric_findings() -> list[Evidence]:
+    return [
+        Evidence(
+            finding="Gross margin improved to 50.1% from 46.5%.",
+            evidence=GROSS_MARGIN_EVIDENCE,
+            source_section="ITEM_2",
+            source_id="chunk-gross-margin",
+            source_type="filing",
+        ),
+        Evidence(
+            finding="Total net sales increased 16% year over year.",
+            evidence=SALES_GROWTH_EVIDENCE,
+            source_section="ITEM_2",
+            source_id="chunk-sales-growth",
+            source_type="filing",
+        ),
+    ]
+
+
+def retrieval_with_real_numeric_evidence() -> list[RetrievalResult]:
+    return [
+        *retrieval_results(),
+        retrieval_result(
+            "chunk-gross-margin",
+            "ITEM_2",
+            GROSS_MARGIN_EVIDENCE,
+            4,
+        ),
+        retrieval_result(
+            "chunk-sales-growth",
+            "ITEM_2",
+            SALES_GROWTH_EVIDENCE,
+            5,
+        ),
     ]
 
 
@@ -326,6 +388,47 @@ def test_wrong_direction_is_rejected_even_with_same_magnitude() -> None:
     assert "UNSUPPORTED_NUMBER" in codes(verify(analysis))
 
 
+@pytest.mark.parametrize("displayed", ["43%", "43.1%"])
+def test_percentage_rounding_uses_displayed_precision(displayed: str) -> None:
+    metrics = real_aapl_metrics()
+    analysis = valid_analysis(
+        metrics=metrics,
+        summary=summary_with(f"Operating cash flow rose {displayed}."),
+    )
+
+    assert "UNSUPPORTED_NUMBER" not in codes(verify(analysis, metrics=metrics))
+
+
+def test_percentage_outside_displayed_precision_is_rejected() -> None:
+    metrics = real_aapl_metrics()
+    analysis = valid_analysis(
+        metrics=metrics,
+        summary=summary_with("Operating cash flow rose 42%."),
+    )
+
+    assert "UNSUPPORTED_NUMBER" in codes(verify(analysis, metrics=metrics))
+
+
+def test_negative_percentage_uses_direction_and_displayed_precision() -> None:
+    metrics = real_aapl_metrics()
+    analysis = valid_analysis(
+        metrics=metrics,
+        summary=summary_with("Capital expenditures fell 28%."),
+    )
+
+    assert "UNSUPPORTED_NUMBER" not in codes(verify(analysis, metrics=metrics))
+
+
+def test_wrong_direction_is_rejected_with_precision_aware_rounding() -> None:
+    metrics = real_aapl_metrics()
+    analysis = valid_analysis(
+        metrics=metrics,
+        summary=summary_with("Capital expenditures rose 28%."),
+    )
+
+    assert "UNSUPPORTED_NUMBER" in codes(verify(analysis, metrics=metrics))
+
+
 def test_billion_normalization_accepts_human_rounding() -> None:
     analysis = valid_analysis(
         summary=summary_with("Revenue was approximately $109.4 billion.")
@@ -474,6 +577,195 @@ def test_real_openrouter_summary_does_not_flag_date_day() -> None:
 
     assert report.valid is True
     assert not any(issue.code == "UNSUPPORTED_NUMBER" for issue in report.issues)
+
+
+def test_summary_rejects_noncanonical_revenue_percentage() -> None:
+    metrics = real_aapl_metrics()
+    analysis = valid_analysis(
+        metrics=metrics,
+        summary=summary_with("Revenue increased 16% year over year."),
+    )
+
+    assert "UNSUPPORTED_NUMBER" in codes(verify(analysis, metrics=metrics))
+
+
+def test_summary_rejects_noncanonical_gross_margin_percentage() -> None:
+    metrics = real_aapl_metrics()
+    analysis = valid_analysis(
+        metrics=metrics,
+        summary=summary_with("Gross margin improved to 50.1%."),
+    )
+
+    assert "UNSUPPORTED_NUMBER" in codes(verify(analysis, metrics=metrics))
+
+
+@pytest.mark.parametrize("percentage", ["50.1%", "46.5%"])
+def test_finding_accepts_percentage_from_its_own_evidence(
+    percentage: str,
+) -> None:
+    finding = Evidence(
+        finding=f"Gross margin was {percentage}.",
+        evidence=GROSS_MARGIN_EVIDENCE,
+        source_section="ITEM_2",
+        source_id="chunk-gross-margin",
+        source_type="filing",
+    )
+    analysis = valid_analysis(positives=[finding])
+
+    report = verify(
+        analysis,
+        retrieval=[
+            *retrieval_results(),
+            retrieval_result(
+                "chunk-gross-margin",
+                "ITEM_2",
+                GROSS_MARGIN_EVIDENCE,
+                4,
+            ),
+        ],
+    )
+
+    assert "UNSUPPORTED_NUMBER" not in codes(report)
+
+
+def test_finding_rejects_percentage_absent_from_its_evidence() -> None:
+    finding = Evidence(
+        finding="Gross margin improved to 55%.",
+        evidence=GROSS_MARGIN_EVIDENCE,
+        source_section="ITEM_2",
+        source_id="chunk-gross-margin",
+        source_type="filing",
+    )
+    analysis = valid_analysis(positives=[finding])
+
+    report = verify(
+        analysis,
+        retrieval=[
+            *retrieval_results(),
+            retrieval_result(
+                "chunk-gross-margin",
+                "ITEM_2",
+                GROSS_MARGIN_EVIDENCE,
+                4,
+            ),
+        ],
+    )
+
+    assert "UNSUPPORTED_NUMBER" in codes(report)
+
+
+def test_finding_accepts_revenue_percentage_from_its_own_evidence() -> None:
+    finding = Evidence(
+        finding="Total net sales increased 16% year over year.",
+        evidence=SALES_GROWTH_EVIDENCE,
+        source_section="ITEM_2",
+        source_id="chunk-sales-growth",
+        source_type="filing",
+    )
+    analysis = valid_analysis(positives=[finding])
+
+    report = verify(
+        analysis,
+        retrieval=[
+            *retrieval_results(),
+            retrieval_result(
+                "chunk-sales-growth",
+                "ITEM_2",
+                SALES_GROWTH_EVIDENCE,
+                4,
+            ),
+        ],
+    )
+
+    assert "UNSUPPORTED_NUMBER" not in codes(report)
+
+
+def test_finding_cannot_borrow_number_from_another_retrieved_chunk() -> None:
+    own_evidence = "Gross margin improved during the quarter."
+    finding = Evidence(
+        finding="Gross margin improved to 50.1%.",
+        evidence=own_evidence,
+        source_section="ITEM_2",
+        source_id="chunk-own-evidence",
+        source_type="filing",
+    )
+    analysis = valid_analysis(positives=[finding])
+
+    report = verify(
+        analysis,
+        retrieval=[
+            *retrieval_results(),
+            retrieval_result(
+                "chunk-own-evidence",
+                "ITEM_2",
+                own_evidence,
+                4,
+            ),
+            retrieval_result(
+                "chunk-other-evidence",
+                "ITEM_2",
+                GROSS_MARGIN_EVIDENCE,
+                5,
+            ),
+        ],
+    )
+
+    assert "UNSUPPORTED_NUMBER" in codes(report)
+
+
+def test_finding_accepts_canonical_number_without_evidence_number() -> None:
+    finding = Evidence(
+        finding="Revenue declined 1.6%.",
+        evidence=POSITIVE_TEXT,
+        source_section="ITEM_7",
+        source_id="chunk-positive",
+        source_type="filing",
+    )
+    analysis = valid_analysis(positives=[finding])
+
+    assert "UNSUPPORTED_NUMBER" not in codes(verify(analysis))
+
+
+def test_latest_openrouter_output_has_only_noncanonical_summary_issues() -> None:
+    metrics = real_aapl_metrics()
+    analysis = valid_analysis(
+        metrics=metrics,
+        summary=LATEST_OPENROUTER_SUMMARY,
+        positives=real_numeric_findings(),
+    )
+
+    report = verify(
+        analysis,
+        metrics=metrics,
+        retrieval=retrieval_with_real_numeric_evidence(),
+    )
+    unsupported = [
+        issue for issue in report.issues if issue.code == "UNSUPPORTED_NUMBER"
+    ]
+
+    assert report.valid is False
+    assert len(unsupported) == 2
+    assert {issue.field for issue in unsupported} == {"executive_summary"}
+    assert any("'16%'" in issue.message for issue in unsupported)
+    assert any("'50.1%'" in issue.message for issue in unsupported)
+
+
+def test_sanitized_openrouter_output_is_valid() -> None:
+    metrics = real_aapl_metrics()
+    analysis = valid_analysis(
+        metrics=metrics,
+        summary=SANITIZED_OPENROUTER_SUMMARY,
+        positives=real_numeric_findings(),
+    )
+
+    report = verify(
+        analysis,
+        metrics=metrics,
+        retrieval=retrieval_with_real_numeric_evidence(),
+    )
+
+    assert report.valid is True
+    assert report.issues == []
 
 
 def test_valid_source_id_is_accepted() -> None:
