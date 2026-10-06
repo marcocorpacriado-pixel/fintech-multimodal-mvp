@@ -86,6 +86,27 @@ _DIRECTION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_MONTH_NAME_PATTERN = (
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+    r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Sept(?:ember)?|"
+    r"Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?"
+)
+_TEXTUAL_DATE_PATTERN = re.compile(
+    rf"""
+    \b(?:
+        {_MONTH_NAME_PATTERN}\s+(?:0?[1-9]|[12]\d|3[01])
+        (?:st|nd|rd|th)?(?:,\s*|\s+)(?:19|20)\d{{2}}
+        |
+        (?:0?[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?\s+
+        {_MONTH_NAME_PATTERN},?\s+(?:19|20)\d{{2}}
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_ISO_DATE_PATTERN = re.compile(
+    r"(?<!\d)(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?!\d)"
+)
+
 _RECOMMENDATION_PATTERN = re.compile(
     r"\b(?:strong\s+)?(?:buy|sell|hold)\b|"
     r"\b(?:overweight|underweight)\b|"
@@ -370,9 +391,14 @@ def _verify_narrative_numbers(
 ) -> None:
     targets = _narrative_targets(analysis, catalog)
     for target in targets:
+        date_spans = _nonfinancial_date_spans(target.text)
         for mention in _extract_numeric_mentions(target.text):
             metric = _closest_metric(target.text, mention, metrics)
-            if _is_nonfinancial_number(target.text, mention):
+            if _is_nonfinancial_number(
+                target.text,
+                mention,
+                date_spans=date_spans,
+            ):
                 continue
             if not _has_financial_signal(mention) and metric is None:
                 continue
@@ -613,7 +639,27 @@ def _has_financial_signal(mention: _NumericMention) -> bool:
     )
 
 
-def _is_nonfinancial_number(text: str, mention: _NumericMention) -> bool:
+def _nonfinancial_date_spans(text: str) -> tuple[tuple[int, int], ...]:
+    """Return complete textual and ISO date spans for numeric exclusion."""
+
+    matches = (
+        *(_TEXTUAL_DATE_PATTERN.finditer(text)),
+        *(_ISO_DATE_PATTERN.finditer(text)),
+    )
+    return tuple(sorted((match.start(), match.end()) for match in matches))
+
+
+def _is_nonfinancial_number(
+    text: str,
+    mention: _NumericMention,
+    *,
+    date_spans: Sequence[tuple[int, int]] = (),
+) -> bool:
+    if any(
+        start <= mention.start and mention.end <= end
+        for start, end in date_spans
+    ):
+        return True
     plain_integer = (
         not _has_financial_signal(mention)
         and mention.value.is_integer()

@@ -25,6 +25,15 @@ from src.extraction.schemas import (
 POSITIVE_TEXT = "Services demand remained resilient during the quarter."
 RISK_TEXT = "Currency volatility may adversely affect reported results."
 OUTLOOK_TEXT = "Management expects demand to remain stable next quarter."
+REAL_AAPL_SUMMARY = (
+    "Apple Inc. reported Q3 2026 results for the period ended June 27, 2026. "
+    "Revenue declined 1.6% quarter over quarter to $109.4 billion, while net "
+    "income rose 0.7% to $29.8 billion and diluted EPS increased 0.5% to "
+    "$2.02. Cash and cash equivalents fell 13.2% to $39.5 billion, and total "
+    "debt was roughly flat at $84.3 billion. Year-to-date operating cash flow "
+    "rose 43.1% to $117.0 billion, while capital expenditures declined 28.2% "
+    "to $6.8 billion."
+)
 
 
 def revenue_metric(**overrides: object) -> FinancialMetric:
@@ -59,6 +68,71 @@ def eps_metric() -> FinancialMetric:
 
 def canonical_metrics() -> list[FinancialMetric]:
     return [revenue_metric(), eps_metric()]
+
+
+def real_aapl_metrics() -> list[FinancialMetric]:
+    common_duration = {
+        "comparison_type": "QoQ",
+        "current_period": "2026-03-29/2026-06-27",
+        "previous_period": "2025-12-28/2026-03-28",
+        "unit": "usd",
+    }
+    return [
+        revenue_metric(),
+        FinancialMetric(
+            name="Net Income",
+            current_value=29_789_000_000.0,
+            previous_value=29_578_000_000.0,
+            change_pct=0.71336804381635,
+            source_ids=["xbrl:current:net-income", "xbrl:previous:net-income"],
+            **common_duration,
+        ),
+        eps_metric(),
+        FinancialMetric(
+            name="Cash and Cash Equivalents",
+            current_value=39_544_000_000.0,
+            previous_value=45_572_000_000.0,
+            change_pct=-13.227420345826385,
+            unit="usd",
+            comparison_type="QoQ",
+            current_period="2026-06-27",
+            previous_period="2026-03-28",
+            source_ids=["xbrl:current:cash", "xbrl:previous:cash"],
+        ),
+        FinancialMetric(
+            name="Total Debt",
+            current_value=84_344_000_000.0,
+            previous_value=84_711_000_000.0,
+            change_pct=-0.433237714110328,
+            unit="usd",
+            comparison_type="QoQ",
+            current_period="2026-06-27",
+            previous_period="2026-03-28",
+            source_ids=["xbrl:current:debt", "xbrl:previous:debt"],
+        ),
+        FinancialMetric(
+            name="Operating Cash Flow",
+            current_value=116_996_000_000.0,
+            previous_value=81_754_000_000.0,
+            change_pct=43.10737089316731,
+            unit="usd",
+            comparison_type="YoY_YTD",
+            current_period="2025-09-28/2026-06-27",
+            previous_period="2024-09-29/2025-06-28",
+            source_ids=["xbrl:current:ocf", "xbrl:previous:ocf"],
+        ),
+        FinancialMetric(
+            name="Capital Expenditures",
+            current_value=6_799_000_000.0,
+            previous_value=9_473_000_000.0,
+            change_pct=-28.227594215137756,
+            unit="usd",
+            comparison_type="YoY_YTD",
+            current_period="2025-09-28/2026-06-27",
+            previous_period="2024-09-29/2025-06-28",
+            source_ids=["xbrl:current:capex", "xbrl:previous:capex"],
+        ),
+    ]
 
 
 def retrieval_result(
@@ -290,6 +364,116 @@ def test_fiscal_quarter_is_not_treated_as_financial_number() -> None:
     analysis = valid_analysis(summary=summary_with("The filing covers Q3."))
 
     assert "UNSUPPORTED_NUMBER" not in codes(verify(analysis))
+
+
+@pytest.mark.parametrize(
+    "date_text",
+    [
+        "June 27, 2026",
+        "Jun 27, 2026",
+        "27 June 2026",
+        "June 27 2026",
+    ],
+)
+def test_textual_date_is_not_treated_as_financial_number(date_text: str) -> None:
+    analysis = valid_analysis(
+        summary=summary_with(f"The reporting period ended {date_text}.")
+    )
+
+    assert "UNSUPPORTED_NUMBER" not in codes(verify(analysis))
+
+
+@pytest.mark.parametrize(
+    "month",
+    [
+        "January",
+        "Jan",
+        "February",
+        "Feb",
+        "March",
+        "Mar",
+        "April",
+        "Apr",
+        "May",
+        "June",
+        "Jun",
+        "July",
+        "Jul",
+        "August",
+        "Aug",
+        "September",
+        "Sep",
+        "October",
+        "Oct",
+        "November",
+        "Nov",
+        "December",
+        "Dec",
+    ],
+)
+def test_textual_dates_support_every_english_month(month: str) -> None:
+    analysis = valid_analysis(
+        summary=summary_with(f"The reporting period ended {month} 15, 2026.")
+    )
+
+    assert "UNSUPPORTED_NUMBER" not in codes(verify(analysis))
+
+
+def test_iso_date_remains_nonfinancial() -> None:
+    analysis = valid_analysis(
+        summary=summary_with("The reporting period ended 2026-06-27.")
+    )
+
+    assert "UNSUPPORTED_NUMBER" not in codes(verify(analysis))
+
+
+def test_item_reference_remains_nonfinancial() -> None:
+    analysis = valid_analysis(summary=summary_with("Item 7 discusses revenue."))
+
+    assert "UNSUPPORTED_NUMBER" not in codes(verify(analysis))
+
+
+def test_financial_percentage_matching_a_day_number_is_still_checked() -> None:
+    metrics = [revenue_metric(change_pct=27.0), eps_metric()]
+    analysis = valid_analysis(
+        metrics=metrics,
+        summary=summary_with("Revenue increased 27%."),
+    )
+
+    assert "UNSUPPORTED_NUMBER" not in codes(verify(analysis, metrics=metrics))
+
+
+def test_financial_percentage_matching_a_day_number_is_still_rejected() -> None:
+    analysis = valid_analysis(summary=summary_with("Revenue increased 27%."))
+
+    assert "UNSUPPORTED_NUMBER" in codes(verify(analysis))
+
+
+def test_currency_value_matching_a_day_number_is_still_checked() -> None:
+    metrics = [
+        revenue_metric(
+            current_value=27_000_000_000.0,
+            previous_value=26_000_000_000.0,
+            change_pct=None,
+        ),
+        eps_metric(),
+    ]
+    analysis = valid_analysis(
+        metrics=metrics,
+        summary=summary_with("Revenue was $27 billion."),
+    )
+
+    assert "UNSUPPORTED_NUMBER" not in codes(verify(analysis, metrics=metrics))
+
+
+def test_real_openrouter_summary_does_not_flag_date_day() -> None:
+    metrics = real_aapl_metrics()
+    analysis = valid_analysis(metrics=metrics, summary=REAL_AAPL_SUMMARY)
+
+    report = verify(analysis, metrics=metrics)
+
+    assert report.valid is True
+    assert not any(issue.code == "UNSUPPORTED_NUMBER" for issue in report.issues)
 
 
 def test_valid_source_id_is_accepted() -> None:
