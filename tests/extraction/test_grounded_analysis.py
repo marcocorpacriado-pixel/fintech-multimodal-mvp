@@ -267,6 +267,62 @@ def test_unquoted_or_fabricated_evidence_is_rejected() -> None:
         analyze_with(response)
 
 
+@pytest.mark.parametrize(
+    "invalid_evidence",
+    [
+        "Revenue growth ... strong demand for services.",
+        "Strong services demand drove higher revenue.",
+        "Revenue growth reflected. strong demand for services.",
+    ],
+    ids=["synthetic-ellipsis", "paraphrase", "joined-noncontiguous-spans"],
+)
+def test_nonliteral_evidence_variants_are_rejected(
+    invalid_evidence: str,
+) -> None:
+    response = valid_output()
+    response["key_positive_developments"][0]["evidence"] = (  # type: ignore[index]
+        invalid_evidence
+    )
+
+    with pytest.raises(GroundedAnalysisError, match="not a chunk excerpt"):
+        analyze_with(response)
+
+
+def test_corrected_encoding_artifact_is_rejected() -> None:
+    source_text = "The Company�s disclosure controls were effective."
+    retrieval = [make_retrieval("chunk-encoding", "ITEM_1", source_text, rank=1)]
+    response = abstention_output()
+    response["key_positive_developments"] = [
+        {
+            "finding": "Disclosure controls were effective.",
+            "evidence": "The Company’s disclosure controls were effective.",
+            "source_section": "ITEM_1",
+            "source_id": "chunk-encoding",
+        }
+    ]
+
+    with pytest.raises(GroundedAnalysisError, match="not a chunk excerpt"):
+        analyze_with(response, retrieval=retrieval)
+
+
+def test_exact_encoding_artifact_is_preserved_and_accepted() -> None:
+    source_text = "The Company�s disclosure controls were effective."
+    retrieval = [make_retrieval("chunk-encoding", "ITEM_1", source_text, rank=1)]
+    response = abstention_output()
+    response["key_positive_developments"] = [
+        {
+            "finding": "Disclosure controls were effective.",
+            "evidence": source_text,
+            "source_section": "ITEM_1",
+            "source_id": "chunk-encoding",
+        }
+    ]
+
+    result, _ = analyze_with(response, retrieval=retrieval)
+
+    assert result.key_positive_developments[0].evidence == source_text
+
+
 def test_abstention_is_valid_when_evidence_is_insufficient() -> None:
     result, _ = analyze_with(abstention_output())
 
@@ -407,6 +463,54 @@ def test_prompts_allow_numbers_only_in_the_finding_own_evidence() -> None:
     )
     assert "same number appears in the finding's own verbatim evidence" in prompt
     assert "Do not borrow numbers from another evidence object" in prompt
+
+
+def test_prompts_require_single_contiguous_verbatim_evidence() -> None:
+    prompt = build_analysis_prompt(
+        company="Apple Inc.",
+        ticker="AAPL",
+        period="Q3 2026",
+        filing_type="10-Q",
+        financial_metrics=[make_metric()],
+        retrieval_results=retrieval_results(),
+    )
+    normalized_system = " ".join(FINANCIAL_ANALYST_SYSTEM_PROMPT.split())
+
+    assert "MUST be copied verbatim" in normalized_system
+    assert "one single contiguous substring" in normalized_system
+    assert 'ellipses such as "..."' in normalized_system
+    assert "Do NOT paraphrase" in normalized_system
+    assert "concatenate non-contiguous sentences or clauses" in normalized_system
+    assert "merge text from multiple chunks" in normalized_system
+    assert "Preserve the source text exactly as provided" in normalized_system
+    assert "abstain from it" in normalized_system
+
+    assert "EVIDENCE COPYING POLICY FOR EVERY FINDING AND RISK" in prompt
+    assert "MUST be one single contiguous substring" in prompt
+    assert "Do NOT paraphrase or summarize" in prompt
+    assert 'Do NOT insert ellipses such as "..."' in prompt
+    assert "Do NOT concatenate non-contiguous sentences" in prompt
+    assert "Do NOT merge text from multiple chunks" in prompt
+    assert "Do NOT normalize or rewrite punctuation" in prompt
+    assert 'if it says "Company�s", copy "Company�s"' in prompt
+    assert "If no single contiguous excerpt supports the claim" in prompt
+
+
+def test_prompt_contains_contiguous_evidence_examples() -> None:
+    prompt = build_analysis_prompt(
+        company="Apple Inc.",
+        ticker="AAPL",
+        period="Q3 2026",
+        filing_type="10-Q",
+        financial_metrics=[make_metric()],
+        retrieval_results=retrieval_results(),
+    )
+
+    assert "INVALID:" in prompt
+    assert "controls ... were effective" in prompt
+    assert "VALID:" in prompt
+    assert "principal executive officer and principal financial officer" in prompt
+    assert "one continuous span in the cited chunk" in prompt
 
 
 def test_numeric_policy_keeps_injection_protection_and_abstention() -> None:
