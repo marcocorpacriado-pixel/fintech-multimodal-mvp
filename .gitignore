@@ -5,7 +5,7 @@ data/processed/
 *.mp3
 *.wav
 
-# Entornos y cachés
+# Entornos y cachï¿½s
 .venv/
 __pycache__/
 *.pyc
@@ -13,3 +13,6 @@ __pycache__/
 
 # VS Code
 .vscode/
+
+# Transcripciones personales / notas locales (no versionar)
+transcripccion_*.txt

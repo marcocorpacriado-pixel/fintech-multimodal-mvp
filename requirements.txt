@@ -1,13 +1,19 @@
-﻿# Core
+# Core
 pandas
-numpy
+numpy                  # también usado por src/audio/ (soundfile, kokoro)
 pyarrow
+python-dotenv>=1.0.0   # carga de .env (Groq API key, rutas de modelos)
 
 # SEC filings
 edgartools==5.21.1
 
+# Audio (src/audio/)
+groq>=0.11.0           # cliente oficial de Groq (whisper-large-v3-turbo)
+kokoro-onnx>=0.4.0     # motor TTS local 82M params, multilingüe
+soundfile>=0.12.1      # lectura/escritura de WAV (requiere libsndfile en el SO)
+pydub>=0.25.1          # conversión WAV→MP3 opcional (requiere ffmpeg en PATH)
+
 # Pendiente de añadir por módulos:
 # - FastAPI, uvicorn (Marco)
 # - streamlit (Marco)
-# - openai-whisper (Cristian)
 # - matplotlib, plotly (Marco)
