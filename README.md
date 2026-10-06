@@ -1,59 +1,242 @@
 # FinTech Multimodal MVP
 
-MVP de una startup FinTech basada en IA multimodal para el análisis automatizado de informes financieros (10-K / 10-Q) y earnings calls.
+Prototipo académico de una startup FinTech basada en IA multimodal para
+analizar filings SEC 10-K/10-Q y, progresivamente, earnings calls. Combina
+texto narrativo, datos XBRL, análisis cualitativo grounded y métricas
+deterministas para producir un resultado estructurado, verificable y apto para
+visualización y síntesis de voz.
 
-**Taller B5-T4 — Octubre 2026**
+**Taller B5-T4 — octubre de 2026**
 
-## 👥 Equipo
+## Estado del proyecto
 
-| Rol | Responsable | Módulo |
-|---|---|---|
-| Extracción y análisis de datos | **Dani** | `src/extraction/` |
-| Audio (transcripción + síntesis) | **Cristian** | `src/audio/` |
-| Visualización e interfaz web | **Marco** | `src/visualization/`, `src/api/`, `app/` |
+- Extracción y análisis SEC/XBRL: implementados y probados.
+- Contrato de integración serializable para API/UI y TTS: implementado.
+- Audio STT/TTS: disponible en `feature/audio_integration`, pendiente de
+  integración final y reconciliación de dependencias.
+- FastAPI, Streamlit y visualización: responsabilidad de Marco; su rama final
+  todavía no está publicada en este repositorio.
 
-## 🎯 Propuesta de valor
+## Arquitectura
 
-Un analista financiero automatizado que recibe informes 10-K/10-Q y earnings calls, y devuelve un informe visual con infografías comparativas y un resumen ejecutivo en audio.
-
-## 🏗️ Arquitectura
-
-_En construcción. Diagrama de flujo multimodal disponible en `docs/`._
-
-## 📦 Estructura del repositorio
-
-```text
-fintech-multimodal-mvp/
-├── .claude/              # Skills y configuración de Claude Code
-├── app/                  # Frontend Streamlit
-├── data/
-│   ├── raw/
-│   │   ├── txt/          # Corpus narrativo (135 archivos)
-│   │   └── xbrl/         # Corpus financiero estructurado (656 Parquet)
-│   └── processed/
-├── docs/                 # Diagramas y documentación
-├── src/
-│   ├── api/              # Backend FastAPI
-│   ├── audio/            # Módulo de audio
-│   ├── extraction/       # Módulo de extracción
-│   └── visualization/    # Módulo de infografías
-├── tests/                # Tests
-├── CLAUDE.md             # Contexto del proyecto para Claude Code
-├── requirements.txt
-└── README.md
+```mermaid
+flowchart TD
+    SEC[SEC filing] --> Narrative[Narrative document]
+    SEC --> XBRL[XBRL facts]
+    Narrative --> Loader[Document loader]
+    Loader --> Chunker[SEC-aware chunking]
+    Chunker --> BM25[BM25 retrieval]
+    XBRL --> Normalize[XBRL normalization]
+    Normalize --> Metrics[Canonical metrics]
+    BM25 --> Analyst[Grounded LLM analyst]
+    Metrics --> Analyst
+    Analyst --> Verifier[Deterministic verifier]
+    Verifier --> Pipeline[AnalysisPipelineResult]
+    Pipeline --> Handoff[AnalysisHandoff]
+    Handoff --> Marco[Marco: API / UI / visualization]
+    Pipeline --> TTSInput[TTSInput]
+    TTSInput --> TTS[Cristian: synthesize]
+    Call[Earnings-call audio] --> STT[Cristian: transcribe]
+    STT -. future transcript adapter .-> BM25
 ```
 
-## 🚀 Instalación y uso
+El flujo SEC/XBRL hasta `AnalysisHandoff` está integrado. La conexión con la
+UI se hará cuando Marco publique su rama. TTS/STT vive en la rama de Cristian;
+la ingesta de transcripts como fuente `earnings_call` es una extensión futura,
+no una capacidad integrada actualmente.
 
-_En construcción._
+## Responsabilidades
 
-## 📊 Corpus de datos
+| Responsable | Ámbito |
+|---|---|
+| Dani | SEC ingestion, loader, chunking, BM25, normalización XBRL, métricas canónicas, LLM grounded, verifier y handoff de integración |
+| Cristian | STT, TTS y contratos de audio |
+| Marco | FastAPI, Streamlit/UI y visualización |
 
-- **SEC filings**: 12 empresas del S&P 500, 2024-2026.
-  - 135 documentos TXT (texto narrativo).
-  - 656 archivos Parquet XBRL (datos financieros estructurados).
-- **Earnings calls**: pendiente de integración.
+La UI presenta contratos ya calculados: no consulta XBRL, no ejecuta retrieval,
+no recalcula métricas y no llama directamente a modelos.
 
-## 📜 Licencia
+## Métricas canónicas
+
+El pipeline entrega inicialmente siete métricas:
+
+| Métrica | Comparación preferida |
+|---|---|
+| Revenue | QoQ, duration quarter-only |
+| Net Income | QoQ, duration quarter-only |
+| Diluted EPS | QoQ, duration quarter-only; nunca se deriva por resta |
+| Cash and Cash Equivalents | QoQ entre valores instant |
+| Total Debt | QoQ entre valores instant consolidados |
+| Operating Cash Flow | YoY YTD cuando es el contexto comparable seguro |
+| Capital Expenditures | YoY YTD cuando es el contexto comparable seguro |
+
+Estas cifras proceden exclusivamente de la capa determinista XBRL. El LLM no
+las calcula, sustituye ni modifica.
+
+## Grounding y verificación
+
+- Cada desarrollo positivo y riesgo necesita evidencia y un `source_id` real.
+- `source_section` debe coincidir con el chunk citado.
+- La evidencia debe ser un único extracto literal y continuo del chunk.
+- El resumen ejecutivo solo puede mencionar cifras presentes en las métricas
+  canónicas, con redondeo, dirección y tipo de comparación compatibles.
+- El verifier comprueba métricas, números narrativos, citas, grounding,
+  longitud del resumen y recomendaciones financieras explícitas.
+- Los errores bloquean el resultado; los warnings se conservan como metadata.
+
+## Modos real y demo
+
+El handoff exige una etiqueta explícita:
+
+- `analysis_mode="real"`: análisis producido mediante un proveedor real.
+- `analysis_mode="demo"`: FakeLLM o fixture determinista previamente validada.
+
+El modo demo no representa una inferencia remota. Existe para que una
+presentación sea reproducible si un proveedor externo está lento o no
+disponible; nunca se activa silenciosamente.
+
+OpenRouter se validó correctamente con respuestas estructuradas reales. En una
+ejecución posterior, el proveedor devolvió contenido vacío tras una generación
+anómala y prolongada, mientras todas las etapas locales permanecieron verdes.
+Este caveat externo motiva mantener un modo demo explícito.
+
+## Requisitos e instalación
+
+Entorno validado: Python 3.14.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pytest -q
+```
+
+> **TODO de integración de audio:** el `requirements.txt` actual cubre el
+> módulo de Dani. Las dependencias de audio se incorporarán desde
+> `feature/audio_integration` durante la integración final, después de que
+> Cristian publique su actualización.
+
+Los datos descargados, `.env`, audios, modelos y artefactos procesados no deben
+versionarse.
+
+## Configuración
+
+Configura las variables en la terminal o en un `.env` local nunca versionado.
+
+| Variable | Módulo | Requerida | Uso |
+|---|---|---:|---|
+| `EDGAR_IDENTITY` | SEC ingestion | Sí para SEC real | Identidad exigida por edgartools |
+| `OPENROUTER_API_KEY` | OpenRouter | Sí en modo real | Autenticación del proveedor |
+| `OPENROUTER_MODEL` | OpenRouter | Sí en modo real | Modelo elegido explícitamente |
+| `OPENROUTER_BASE_URL` | OpenRouter | No | Base URL compatible; tiene default |
+| `OPENROUTER_TIMEOUT_SECONDS` | OpenRouter | No | Timeout HTTP explícito |
+| `OPENROUTER_MAX_RETRIES` | OpenRouter | No | Reintentos transitorios acotados |
+| `GROQ_API_KEY` | Audio STT | Sí para STT real | Groq Whisper |
+| `KOKORO_MODEL_DIR` | Audio TTS | No | Caché local de modelo y voces Kokoro |
+
+Ejemplo sin secretos:
+
+```powershell
+$env:EDGAR_IDENTITY = "Nombre Apellido correo@dominio.example"
+$env:OPENROUTER_API_KEY = "<configurar-localmente>"
+$env:OPENROUTER_MODEL = "<modelo-compatible-con-json-schema>"
+$env:GROQ_API_KEY = "<configurar-localmente>"
+$env:KOKORO_MODEL_DIR = "C:\ruta\a\cache\kokoro"
+```
+
+## Ejecución del pipeline de análisis
+
+Ejemplo mínimo real, sin claves hardcodeadas:
+
+```python
+from src.extraction import (
+    OpenRouterLLMClient,
+    prepare_sec_analysis_inputs,
+    run_analysis_pipeline,
+)
+from src.integration import build_analysis_handoff
+
+prepared = prepare_sec_analysis_inputs(
+    ticker="AAPL",
+    accession="0000320193-26-000020",
+    form="10-Q",
+)
+
+with OpenRouterLLMClient.from_env() as client:
+    result = run_analysis_pipeline(
+        filing_path=prepared.filing_path,
+        company=prepared.company,
+        ticker=prepared.ticker,
+        period=prepared.period,
+        filing_type=prepared.filing_type,
+        current_xbrl_filing=prepared.current_filing,
+        previous_xbrl_filing=prepared.previous_filing,
+        llm_client=client,
+    )
+    handoff = build_analysis_handoff(
+        result,
+        analysis_mode="real",
+        provider="openrouter",
+        model=client.model,
+    )
+
+payload = handoff.model_dump(mode="json")
+```
+
+El pipeline acepta cualquier implementación del protocolo `LLMClient`. Los
+tests offline inyectan dobles deterministas; el repositorio no expone todavía
+un runner demo público, por lo que no se documenta una API ficticia.
+
+## Audio
+
+La rama `feature/audio_integration` expone:
+
+```python
+from src.audio import list_voices, synthesize, transcribe
+from src.integration import build_tts_input
+
+tts_input = build_tts_input(result, analysis_mode="real")
+audio = synthesize(tts_input.text, language="en")
+
+transcript = transcribe("earnings-call.mp3", language="en")
+voices = list_voices("en")
+```
+
+- TTS consume directamente `executive_summary`.
+- STT tiene un límite práctico de 25 MB por petición; calls largas requieren
+  preprocesamiento antes de transcribir.
+- La salida MP3 requiere `pydub` y FFmpeg; WAV es la salida nativa.
+- Kokoro puede descargar y cargar aproximadamente 350 MB de modelo/voces en el
+  primer uso, por lo que conviene hacer warm-up antes de una demo.
+
+## Testing
+
+```powershell
+python -m pytest -q
+python -m compileall src
+```
+
+Checkpoint D9A inicial: `378 passed, 3 warnings`. Los warnings conocidos son
+deprecaciones internas de edgartools 5.21.1 y no fallos funcionales.
+
+## Known limitations
+
+- BM25 es retrieval léxico; todavía no existe retrieval semántico o híbrido.
+- El catálogo productivo cubre siete métricas canónicas.
+- La validación real profunda se ha realizado principalmente con AAPL.
+- SEC/LLM/Groq son servicios externos y pueden sufrir latencia o indisponibilidad.
+- El rendering SEC heredado puede contener el carácter de reemplazo U+FFFD.
+- Earnings calls superiores a 25 MB necesitan preprocesamiento para STT.
+- La propagación completa de `source_type="earnings_call"` hasta retrieval es
+  una evolución futura.
+- La UI/API/visualización de Marco está pendiente de publicación e integración.
+
+## Documentación de entrega
+
+- [Contrato D8C](docs/integration/D8C_HANDOFF.md)
+- [Checklist de demo](docs/demo/DEMO_CHECKLIST.md)
+- [Checklist de integración final](docs/integration/FINAL_INTEGRATION_CHECKLIST.md)
+
+## Licencia
 
 Proyecto académico — Taller B5-T4.

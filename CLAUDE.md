@@ -1,47 +1,64 @@
-# CLAUDE.md — Contexto del proyecto para Claude Code
+# CLAUDE.md — contexto operativo del proyecto
 
-## 🎯 Proyecto
+## Proyecto
 
-MVP de una startup FinTech multimodal (Taller B5-T4). Análisis automatizado de informes financieros SEC (10-K / 10-Q) y earnings calls. Salida: informe visual con infografías + resumen ejecutivo en audio.
+MVP académico FinTech multimodal (Taller B5-T4). Analiza filings SEC 10-K/10-Q
+y prepara la incorporación futura de earnings calls. La salida estable es un
+análisis financiero estructurado, grounded y verificado, consumible por una
+API/UI y por TTS.
 
-## 👥 Equipo y módulos
+## Equipo y límites
 
-- **Dani** → `src/extraction/` (extracción de datos, agentes de análisis, chunks)
-- **Cristian** → `src/audio/` (Whisper para transcripción, TTS para resumen)
-- **Marco** → `src/visualization/`, `src/api/`, `app/` (infografías, FastAPI, Streamlit)
+- **Dani:** `src/extraction/`, `src/integration/` y sus tests.
+- **Cristian:** `src/audio/` y sus tests.
+- **Marco:** `src/api/`, `src/visualization/`, `app/` y sus tests.
 
-**Regla de oro**: cada uno trabaja en su carpeta. No modificar código de otro módulo sin avisar.
+No modificar módulos de otro responsable ni hacer merges, commits o pushes sin
+coordinación explícita. No introducir llamadas a modelos en UI o visualización.
 
-## 🏗️ Arquitectura
+## Capas
 
-Separación estricta de capas:
+1. `src/extraction/`: SEC ingestion, loader, chunking, BM25, XBRL, métricas,
+   grounded LLM y verifier.
+2. `src/integration/`: DTOs serializables y errores seguros para API/UI/audio.
+3. `src/audio/`: STT/TTS, actualmente en `feature/audio_integration`.
+4. `src/api/`: futura orquestación FastAPI de Marco.
+5. `src/visualization/` y `app/`: futura presentación de Marco.
 
-1. **Capa de modelos IA** (`src/extraction/`, `src/audio/`): llamadas a modelos, orquestación, pre/postprocesamiento.
-2. **Capa de lógica de negocio** (`src/api/`): FastAPI, endpoints, validación, orquestación del pipeline.
-3. **Capa de presentación** (`app/`, `src/visualization/`): Streamlit, infografías, UX.
+La UI debe consumir `AnalysisHandoff`: nunca recalcula métricas, interpreta
+XBRL, ejecuta retrieval o llama directamente al LLM.
 
-**Nunca** mezclar: no hacer llamadas a modelos directamente desde la UI.
-
-## 🐍 Stack técnico
+## Stack validado
 
 - Python 3.14
-- `edgartools` (v5.21.1) para SEC filings
-- FastAPI + Streamlit
-- Pandas + PyArrow (Parquet)
-- Modelos IA: pendiente de definir (open-source preferido por presupuesto)
+- edgartools 5.21.1
+- pandas, NumPy y PyArrow
+- Pydantic 2
+- rank-bm25
+- httpx para OpenRouter
+- pytest
 
-## 📦 Datos disponibles
+Las dependencias de audio y presentación se reconciliarán al integrar sus
+ramas. No versionar `.env`, datos SEC, modelos o audio.
 
-- `data/raw/txt/` — 135 archivos TXT de 10-K/10-Q (12 tickers, 2024-2026)
-- `data/raw/xbrl/` — 656 Parquet con estados financieros (balance, income, cash flow, equity, comprehensive)
+## Configuración principal
 
-**No commitear datos** (están en `.gitignore`). Se regeneran con `src/extraction/download_xbrl.py`.
+- `EDGAR_IDENTITY`: SEC real.
+- `OPENROUTER_API_KEY` y `OPENROUTER_MODEL`: análisis real.
+- `GROQ_API_KEY`: STT cuando se integre audio.
+- `KOKORO_MODEL_DIR`: caché TTS opcional.
 
-## ⚙️ Comandos frecuentes
+Nunca imprimir secretos, headers de autorización, prompts completos o filings.
+
+## Comandos de verificación
 
 ```powershell
-# Activar entorno virtual
 .\.venv\Scripts\Activate.ps1
+python -m pytest -q
+python -m compileall src
+git diff --check
+git status --short
+```
 
-# Ejecutar script de descarga (si hace falta regenerar datos)
-python src\extraction\download_xbrl.py
+Para arquitectura, ejecución y limitaciones, consultar `README.md`. Para el
+contrato entre módulos, consultar `docs/integration/D8C_HANDOFF.md`.
