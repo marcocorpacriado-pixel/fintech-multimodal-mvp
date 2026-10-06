@@ -19,6 +19,23 @@ SourceType = Literal["filing", "xbrl", "earnings_call", "unknown"]
 Sentiment = Literal["positive", "neutral", "negative", "mixed", "unknown"]
 XBRLPeriodType = Literal["instant", "duration"]
 ComparisonType = Literal["QoQ", "YoY", "YoY_YTD"]
+VerificationSeverity = Literal["error", "warning"]
+VerificationCode = Literal[
+    "METRICS_MISMATCH",
+    "UNSUPPORTED_NUMBER",
+    "INVALID_SOURCE_ID",
+    "EVIDENCE_NOT_IN_SOURCE",
+    "SECTION_MISMATCH",
+    "UNGROUNDED_CLAIM",
+    "SOURCE_TICKER_MISMATCH",
+    "INVESTMENT_RECOMMENDATION",
+    "SUMMARY_TOO_SHORT",
+    "SUMMARY_TOO_LONG",
+    "OUTLOOK_WITHOUT_EVIDENCE",
+    "COMPANY_MISMATCH",
+    "TICKER_MISMATCH",
+    "PERIOD_MISMATCH",
+]
 
 
 class ExtractionSchema(BaseModel):
@@ -234,6 +251,30 @@ class NormalizedXBRLFact(ExtractionSchema):
         return self
 
 
+class VerificationIssue(ExtractionSchema):
+    """One stable, machine-readable deterministic verification finding."""
+
+    code: VerificationCode
+    severity: VerificationSeverity
+    message: str = Field(min_length=1)
+    field: str = Field(min_length=1)
+    source_id: str | None = Field(default=None, min_length=1)
+
+
+class VerificationReport(ExtractionSchema):
+    """Aggregate verification outcome; warnings do not invalidate analysis."""
+
+    valid: bool
+    issues: list[VerificationIssue] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> Self:
+        expected = not any(issue.severity == "error" for issue in self.issues)
+        if self.valid != expected:
+            raise ValueError("valid must equal the absence of error issues")
+        return self
+
+
 __all__ = [
     "ComparisonType",
     "DocumentChunk",
@@ -248,5 +289,9 @@ __all__ = [
     "RetrievalResult",
     "Sentiment",
     "SourceType",
+    "VerificationCode",
+    "VerificationIssue",
+    "VerificationReport",
+    "VerificationSeverity",
     "XBRLPeriodType",
 ]

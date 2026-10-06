@@ -1,5 +1,10 @@
 """Financial document extraction and analysis contracts."""
 
+from .analysis_verifier import (
+    AnalysisVerificationError,
+    assert_verified_analysis,
+    verify_analysis,
+)
 from .financial_analyzer import (
     METRIC_REGISTRY,
     FinancialMetricSelectionError,
@@ -33,9 +38,12 @@ from .schemas import (
     ManagementOutlook,
     NormalizedXBRLFact,
     RetrievalResult,
+    VerificationIssue,
+    VerificationReport,
 )
 
 __all__ = [
+    "AnalysisVerificationError",
     "ComparisonType",
     "DocumentChunk",
     "Evidence",
@@ -57,9 +65,13 @@ __all__ = [
     "NormalizedXBRLFact",
     "OpenRouterLLMClient",
     "RetrievalResult",
+    "VerificationIssue",
+    "VerificationReport",
     "analyze_financials",
+    "assert_verified_analysis",
     "build_analysis_prompt",
     "build_financial_metrics",
     "classify_duration",
     "qualitative_analysis_json_schema",
+    "verify_analysis",
 ]
