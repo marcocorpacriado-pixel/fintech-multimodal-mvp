@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from edgar import Company
+from edgar.core import is_probably_html
+from edgar.documents import HTMLParser, ParserConfig
 from edgar.httprequests import IdentityNotSetException
+from edgar.richtools import rich_to_text
 
 from .schemas import FilingType
 
@@ -405,20 +408,72 @@ def _require_xbrl(filing: SECFilingLike, *, label: str) -> None:
 
 
 def _extract_narrative(filing: SECFilingLike) -> str:
+    primary_error: Exception | None = None
     try:
         narrative = filing.text()
-    except IdentityNotSetException as error:
-        raise _identity_error() from error
+        if isinstance(narrative, str) and narrative.strip():
+            return _normalize_narrative_text(narrative)
+        primary_error = ValueError("filing.text() returned empty narrative text")
     except Exception as error:
-        raise SECNarrativeExtractionError(
-            f"could not extract narrative for "
-            f"{_filing_accession(filing)!r}: {error}"
-        ) from error
-    if not isinstance(narrative, str) or not narrative.strip():
-        raise SECNarrativeExtractionError(
-            f"filing {_filing_accession(filing)!r} produced empty narrative text"
+        primary_error = error
+
+    try:
+        fallback = _extract_document_narrative(filing)
+        return _normalize_narrative_text(fallback)
+    except Exception as fallback_error:
+        if isinstance(primary_error, IdentityNotSetException) or isinstance(
+            fallback_error, IdentityNotSetException
+        ):
+            raise _identity_error() from fallback_error
+        primary_detail = (
+            f"{type(primary_error).__name__}: {primary_error}"
+            if primary_error is not None
+            else "unknown primary extraction failure"
         )
-    return narrative.replace("\r\n", "\n").replace("\r", "\n")
+        raise SECNarrativeExtractionError(
+            f"could not extract narrative for {_filing_accession(filing)!r}; "
+            f"filing.text failed ({primary_detail}); SGML document fallback "
+            f"failed ({type(fallback_error).__name__}: {fallback_error})"
+        ) from fallback_error
+
+
+def _extract_document_narrative(filing: SECFilingLike) -> str:
+    """Render the SGML primary attachment when ``EntityFiling.text`` fails."""
+
+    document = getattr(filing, "document", None)
+    if document is None:
+        raise ValueError("filing.document is unavailable")
+    content = getattr(document, "content", None)
+    if isinstance(content, bytes):
+        try:
+            content = content.decode("utf-8")
+        except UnicodeDecodeError:
+            content = content.decode("cp1252")
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("primary SGML attachment has no textual content")
+
+    if not is_probably_html(content):
+        return content
+
+    parser = HTMLParser(ParserConfig(form=_filing_form(filing)))
+    parsed_document = parser.parse(content)
+    if parsed_document.is_empty:
+        raise ValueError("primary SGML attachment produced an empty document")
+    rendered = rich_to_text(parsed_document, width=500)
+    if not isinstance(rendered, str) or not rendered.strip():
+        raise ValueError("primary SGML attachment rendered as empty text")
+    return rendered
+
+
+def _normalize_narrative_text(text: str) -> str:
+    """Normalize transport whitespace without collapsing paragraph structure."""
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = "\n".join(line.rstrip(" \t") for line in normalized.split("\n"))
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
+    if not normalized:
+        raise ValueError("narrative contains only whitespace")
+    return normalized + "\n"
 
 
 def _materialize_narrative(

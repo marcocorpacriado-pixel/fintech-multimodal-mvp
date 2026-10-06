@@ -71,6 +71,11 @@ class FakeXBRL:
 
 
 @dataclass
+class FakeAttachment:
+    content: str | bytes
+
+
+@dataclass
 class FakeFiling:
     accession_no: str
     form: str
@@ -81,8 +86,11 @@ class FakeFiling:
     cik: int = 320193
     company: str = "Apple Inc."
     ticker: str = "AAPL"
+    text_error: Exception | None = None
+    document_value: FakeAttachment | None = None
     text_calls: int = 0
     xbrl_calls: int = 0
+    document_calls: int = 0
 
     @property
     def accession_number(self) -> str:
@@ -90,11 +98,18 @@ class FakeFiling:
 
     def text(self) -> str:
         self.text_calls += 1
+        if self.text_error is not None:
+            raise self.text_error
         return self.narrative
 
     def xbrl(self) -> FakeXBRL | None:
         self.xbrl_calls += 1
         return self.xbrl_value
+
+    @property
+    def document(self) -> FakeAttachment | None:
+        self.document_calls += 1
+        return self.document_value
 
 
 @dataclass
@@ -392,6 +407,95 @@ def test_narrative_txt_is_created(tmp_path: Path) -> None:
     assert result.filing_path.suffix == ".txt"
 
 
+def test_working_filing_text_is_used_without_document_fallback(
+    tmp_path: Path,
+) -> None:
+    current = current_filing(
+        document_value=FakeAttachment("<html><body>unused</body></html>")
+    )
+
+    result, _, _ = prepare(tmp_path, company=company_with(current=current))
+
+    assert result.filing_path.read_text(encoding="utf-8") == NARRATIVE
+    assert current.text_calls == 1
+    assert current.document_calls == 0
+
+
+def test_filing_text_exception_uses_primary_document_fallback(
+    tmp_path: Path,
+) -> None:
+    current = current_filing(
+        text_error=AttributeError("homepage primary document is missing"),
+        document_value=FakeAttachment(
+            "<html><body><h1>Item 2</h1><p>Fallback narrative works.</p>"
+            "</body></html>"
+        ),
+    )
+
+    result, _, _ = prepare(tmp_path, company=company_with(current=current))
+    materialized = result.filing_path.read_text(encoding="utf-8")
+
+    assert "Item 2" in materialized
+    assert "Fallback narrative works." in materialized
+    assert current.document_calls == 1
+
+
+def test_empty_filing_text_uses_document_fallback(tmp_path: Path) -> None:
+    current = current_filing(
+        narrative="  \r\n ",
+        document_value=FakeAttachment("Primary document narrative."),
+    )
+
+    result, _, _ = prepare(tmp_path, company=company_with(current=current))
+
+    assert result.filing_path.read_text(encoding="utf-8") == (
+        "Primary document narrative.\n"
+    )
+
+
+def test_primary_sgml_document_content_is_used(tmp_path: Path) -> None:
+    attachment = FakeAttachment(
+        "<html><body><p>Text supplied by SGML attachment.</p></body></html>"
+    )
+    current = current_filing(
+        text_error=RuntimeError("primary homepage unavailable"),
+        document_value=attachment,
+    )
+
+    result, _, _ = prepare(tmp_path, company=company_with(current=current))
+
+    assert "Text supplied by SGML attachment." in result.filing_path.read_text(
+        encoding="utf-8"
+    )
+    assert current.document is attachment
+
+
+def test_fallback_txt_is_nonempty(tmp_path: Path) -> None:
+    current = current_filing(
+        text_error=RuntimeError("text extraction failed"),
+        document_value=FakeAttachment(b"Fallback bytes narrative."),
+    )
+
+    result, _, _ = prepare(tmp_path, company=company_with(current=current))
+
+    assert result.filing_path.stat().st_size > 0
+    assert result.filing_path.read_text(encoding="utf-8").strip()
+
+
+def test_fallback_normalizes_line_endings_and_blank_lines(
+    tmp_path: Path,
+) -> None:
+    current = current_filing(
+        text_error=RuntimeError("text extraction failed"),
+        document_value=FakeAttachment("First\r\n\r\n\rSecond\r\n"),
+    )
+
+    result, _, _ = prepare(tmp_path, company=company_with(current=current))
+    materialized = result.filing_path.read_bytes()
+
+    assert materialized == b"First\n\nSecond\n"
+
+
 def test_narrative_filename_is_deterministic(tmp_path: Path) -> None:
     result, _, _ = prepare(tmp_path)
 
@@ -414,13 +518,35 @@ def test_narrative_is_nonempty_and_loadable_by_d7_loader(tmp_path: Path) -> None
 
 
 def test_existing_different_file_is_not_overwritten(tmp_path: Path) -> None:
-    result, company, _ = prepare(tmp_path)
+    current = current_filing(
+        text_error=RuntimeError("text extraction failed"),
+        document_value=FakeAttachment("Fallback narrative."),
+    )
+    company = company_with(current=current)
+    result, _, _ = prepare(tmp_path, company=company)
     result.filing_path.write_text("different content", encoding="utf-8")
 
     with pytest.raises(SECNarrativeExtractionError, match="refusing to overwrite"):
         prepare(tmp_path, company=company)
 
     assert result.filing_path.read_text(encoding="utf-8") == "different content"
+
+
+def test_both_narrative_paths_failing_raise_contextual_error(
+    tmp_path: Path,
+) -> None:
+    current = current_filing(
+        text_error=AttributeError("homepage primary document is missing"),
+        document_value=None,
+    )
+
+    with pytest.raises(SECNarrativeExtractionError) as captured:
+        prepare(tmp_path, company=company_with(current=current))
+
+    message = str(captured.value)
+    assert "filing.text failed" in message
+    assert "SGML document fallback failed" in message
+    assert isinstance(captured.value.__cause__, ValueError)
 
 
 def test_nested_output_directory_is_created(tmp_path: Path) -> None:
