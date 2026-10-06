@@ -1,0 +1,134 @@
+{
+  "analysis": {
+    "company": "Demo Corp (synthetic data)",
+    "ticker": "DEMO",
+    "period": "2026-06-30",
+    "filing_type": "10-Q",
+    "financial_metrics": [
+      {
+        "name": "Revenue",
+        "current_value": 1250000000.0,
+        "previous_value": 1180000000.0,
+        "change_pct": 5.9322033898,
+        "unit": "usd",
+        "comparison_type": "QoQ",
+        "current_period": "2026-04-01/2026-06-30",
+        "previous_period": "2026-01-01/2026-03-31",
+        "source_ids": ["xbrl:demo:current:revenue", "xbrl:demo:previous:revenue"]
+      },
+      {
+        "name": "Net Income",
+        "current_value": 210000000.0,
+        "previous_value": 225000000.0,
+        "change_pct": -6.6666666667,
+        "unit": "usd",
+        "comparison_type": "QoQ",
+        "current_period": "2026-04-01/2026-06-30",
+        "previous_period": "2026-01-01/2026-03-31",
+        "source_ids": ["xbrl:demo:current:net_income", "xbrl:demo:previous:net_income"]
+      },
+      {
+        "name": "Diluted EPS",
+        "current_value": 1.42,
+        "previous_value": 1.51,
+        "change_pct": -5.9602649007,
+        "unit": "usdPerShare",
+        "comparison_type": "QoQ",
+        "current_period": "2026-04-01/2026-06-30",
+        "previous_period": "2026-01-01/2026-03-31",
+        "source_ids": ["xbrl:demo:current:diluted_eps", "xbrl:demo:previous:diluted_eps"]
+      },
+      {
+        "name": "Cash and Cash Equivalents",
+        "current_value": 830000000.0,
+        "previous_value": 910000000.0,
+        "change_pct": -8.7912087912,
+        "unit": "usd",
+        "comparison_type": "QoQ",
+        "current_period": "2026-06-30",
+        "previous_period": "2026-03-31",
+        "source_ids": ["xbrl:demo:current:cash", "xbrl:demo:previous:cash"]
+      },
+      {
+        "name": "Total Debt",
+        "current_value": 1500000000.0,
+        "previous_value": null,
+        "change_pct": null,
+        "unit": "usd",
+        "comparison_type": null,
+        "current_period": "2026-06-30",
+        "previous_period": null,
+        "source_ids": ["xbrl:demo:current:total_debt"]
+      },
+      {
+        "name": "Operating Cash Flow",
+        "current_value": 640000000.0,
+        "previous_value": 560000000.0,
+        "change_pct": 14.2857142857,
+        "unit": "usd",
+        "comparison_type": "YoY_YTD",
+        "current_period": "2026-01-01/2026-06-30",
+        "previous_period": "2025-01-01/2025-06-30",
+        "source_ids": ["xbrl:demo:current:ocf", "xbrl:demo:previous:ocf"]
+      },
+      {
+        "name": "Capital Expenditures",
+        "current_value": 95000000.0,
+        "previous_value": 120000000.0,
+        "change_pct": -20.8333333333,
+        "unit": "usd",
+        "comparison_type": "YoY_YTD",
+        "current_period": "2026-01-01/2026-06-30",
+        "previous_period": "2025-01-01/2025-06-30",
+        "source_ids": ["xbrl:demo:current:capex", "xbrl:demo:previous:capex"]
+      }
+    ],
+    "key_positive_developments": [
+      {
+        "finding": "Subscription revenue drove top-line growth.",
+        "evidence": "Net revenue increased primarily due to higher subscription volumes.",
+        "source_section": "PART_I_ITEM_2",
+        "source_id": "demo-filing:chunk-0003",
+        "source_type": "filing"
+      }
+    ],
+    "key_risks": [
+      {
+        "finding": "Cash balances declined during the quarter.",
+        "evidence": "Cash and cash equivalents decreased due to debt repayments and capital investment.",
+        "source_section": "PART_I_ITEM_2",
+        "source_id": "demo-filing:chunk-0011",
+        "source_type": "filing"
+      }
+    ],
+    "management_outlook": {
+      "summary": "Management expects continued demand for subscription services.",
+      "sentiment": "positive",
+      "source_ids": ["demo-filing:chunk-0017"]
+    },
+    "executive_summary": "This is a demonstration using synthetic data for Demo Corp's quarterly report for the period ending June 30, 2026. Revenue rose about 5.9 percent quarter over quarter to 1.25 billion dollars, driven by higher subscription volumes. Net income fell about 6.7 percent to 210 million dollars, and diluted earnings per share declined to 1.42 dollars. Year to date, operating cash flow grew about 14.3 percent, while capital expenditures dropped about 20.8 percent. The main risk is liquidity: cash and cash equivalents decreased about 8.8 percent to 830 million dollars after debt repayments and capital investment. Management expects continued demand for subscription services. These figures are synthetic and do not describe any real company."
+  },
+  "verification": {
+    "valid": true,
+    "issues": [
+      {
+        "code": "SECTION_MISMATCH",
+        "severity": "warning",
+        "message": "Cited section differs from the section of the retrieved chunk.",
+        "field": "key_risks[0].source_section",
+        "source_id": "demo-filing:chunk-0011"
+      }
+    ]
+  },
+  "queries": [
+    "revenue operating performance",
+    "liquidity cash debt",
+    "management outlook guidance"
+  ],
+  "retrieval_count": 3,
+  "retrieved_source_ids": [
+    "demo-filing:chunk-0003",
+    "demo-filing:chunk-0011",
+    "demo-filing:chunk-0017"
+  ]
+}
