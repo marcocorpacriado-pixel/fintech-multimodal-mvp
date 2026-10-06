@@ -228,11 +228,12 @@ voices = list_voices("en")
 
 ```powershell
 python -m pytest -q
-python -m compileall src
+python -m compileall src app
 ```
 
-Checkpoint D9A inicial: `378 passed, 3 warnings`. Los warnings conocidos son
-deprecaciones internas de edgartools 5.21.1 y no fallos funcionales.
+Estado integrado final (Dani + Cristian + Marco): `394 passed, 4 warnings`.
+Los warnings conocidos son deprecaciones internas de edgartools 5.21.1 y de
+`starlette.testclient` (uso de `httpx`), no fallos funcionales.
 
 ## Known limitations
 

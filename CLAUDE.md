@@ -21,9 +21,13 @@ coordinación explícita. No introducir llamadas a modelos en UI o visualizació
 1. `src/extraction/`: SEC ingestion, loader, chunking, BM25, XBRL, métricas,
    grounded LLM y verifier.
 2. `src/integration/`: DTOs serializables y errores seguros para API/UI/audio.
-3. `src/audio/`: STT/TTS, actualmente en `feature/audio_integration`.
-4. `src/api/`: futura orquestación FastAPI de Marco.
-5. `src/visualization/` y `app/`: futura presentación de Marco.
+3. `src/audio/`: STT/TTS de Cristian. El STT existe como módulo, pero aún no
+   forma parte del pipeline de análisis.
+4. `src/api/`: orquestación FastAPI de Marco (demo explícito, real sin fallback).
+5. `src/visualization/` y `app/`: presentación Streamlit/Plotly de Marco, que
+   consume FastAPI solo por HTTP.
+
+Las cinco capas están integradas en `integration/final-mvp`.
 
 La UI debe consumir `AnalysisHandoff`: nunca recalcula métricas, interpreta
 XBRL, ejecuta retrieval o llama directamente al LLM.
@@ -37,15 +41,17 @@ XBRL, ejecuta retrieval o llama directamente al LLM.
 - rank-bm25
 - httpx para OpenRouter
 - pytest
+- Audio: groq, kokoro-onnx, soundfile, pydub, python-dotenv
+- API y presentación: FastAPI, Uvicorn, Streamlit, Plotly
 
-Las dependencias de audio y presentación se reconciliarán al integrar sus
-ramas. No versionar `.env`, datos SEC, modelos o audio.
+Todas las dependencias están declaradas en `requirements.txt`. No versionar
+`.env`, datos SEC, modelos o audio.
 
 ## Configuración principal
 
 - `EDGAR_IDENTITY`: SEC real.
 - `OPENROUTER_API_KEY` y `OPENROUTER_MODEL`: análisis real.
-- `GROQ_API_KEY`: STT cuando se integre audio.
+- `GROQ_API_KEY`: STT (módulo `src/audio/stt.py`).
 - `KOKORO_MODEL_DIR`: caché TTS opcional.
 
 Nunca imprimir secretos, headers de autorización, prompts completos o filings.
@@ -55,7 +61,7 @@ Nunca imprimir secretos, headers de autorización, prompts completos o filings.
 ```powershell
 .\.venv\Scripts\Activate.ps1
 python -m pytest -q
-python -m compileall src
+python -m compileall src app
 git diff --check
 git status --short
 ```
