@@ -143,6 +143,12 @@ def build_analysis_prompt(
     )
 
 
+def qualitative_analysis_json_schema() -> dict[str, Any]:
+    """Return the exact Pydantic schema expected from an LLM provider."""
+
+    return _QualitativeAnalysis.model_json_schema()
+
+
 def analyze_financials(
     *,
     company: str,
@@ -318,4 +324,5 @@ __all__ = [
     "LLMClient",
     "analyze_financials",
     "build_analysis_prompt",
+    "qualitative_analysis_json_schema",
 ]
