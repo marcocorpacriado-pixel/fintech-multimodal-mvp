@@ -7,8 +7,22 @@ httpx>=0.27,<1
 # SEC filings
 edgartools==5.21.1
 
-# Pendiente de añadir por módulos:
-# - FastAPI, uvicorn (Marco)
-# - streamlit (Marco)
-# - openai-whisper (Cristian)
-# - matplotlib, plotly (Marco)
+# Extracción y análisis (Dani)
+pydantic>=2
+rank_bm25
+
+# Audio (Cristian)
+groq
+kokoro-onnx
+soundfile
+python-dotenv
+# pydub  # opcional: solo para output_format="mp3" (requiere ffmpeg)
+
+# API y visualización (Marco)
+fastapi
+uvicorn
+streamlit
+plotly
+
+# Tests
+pytest
