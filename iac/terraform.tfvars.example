@@ -1,0 +1,9 @@
+# Copia este fichero a terraform.tfvars y ajusta los valores.
+# terraform.tfvars está en .gitignore (nunca lo subas si trae datos reales).
+
+gcp_project_id     = "ml-miax"
+gcp_project_sys_id = "ml-miax"
+region_name        = "europe-southwest1"
+base_name          = "fintech-mvp"
+openrouter_model   = "anthropic/claude-3.5-sonnet"
+repo_iac_url       = "fintech-multimodal-mvp"
