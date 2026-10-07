@@ -37,6 +37,22 @@ def _route_to_test_client(method, url, timeout=None, **kwargs):
     return api_client.request(method, url.removeprefix("http://localhost:8000"), **kwargs)
 
 
+def _stream_to_test_client(method, url, timeout=None, **kwargs):
+    return api_client.stream(method, url.removeprefix("http://localhost:8000"), **kwargs)
+
+
+class _FakeChatClient:
+    """Stands in for OpenRouterChatClient: records the call, yields tokens."""
+
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.calls = []
+
+    def open(self, *, system_prompt, messages):
+        self.calls.append({"system_prompt": system_prompt, "messages": messages})
+        return iter(self.tokens)
+
+
 def _real_handoff(*, warnings: bool = False):
     handoff = _run_demo_analysis()
     issues = handoff.verification.issues if warnings else []
@@ -346,6 +362,7 @@ def test_results_use_layered_information_architecture_and_snapshot():
         ":material/monitoring: Financials",
         ":material/article: Narrative",
         ":material/verified_user: Sources",
+        ":material/forum: Ask",
     ]
     assert "Executive snapshot" in _all_text(at)
     assert [metric.label for metric in at.metric[:4]] == [
@@ -421,3 +438,65 @@ def test_app_never_imports_backend_modules():
     }
     forbidden = ("src.extraction", "src.integration", "src.audio", "src.api", "edgar")
     assert not [module for module in imported if module and module.startswith(forbidden)]
+
+
+def test_chat_streams_grounded_answer_with_cited_sources():
+    fake = _FakeChatClient(["Revenue rose ", "5.9% QoQ [M1]."])
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("httpx.stream", side_effect=_stream_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+        patch("src.api.main.OpenRouterChatClient.from_env", return_value=fake),
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+        at.chat_input[0].set_value("How did revenue change?").run()
+
+    assert not at.exception
+    assert fake.calls[0]["messages"] == [
+        {"role": "user", "content": "How did revenue change?"}
+    ]
+    assert "[M1] Revenue: current=1,250,000,000.0 usd" in fake.calls[0]["system_prompt"]
+    messages = at.session_state["chat_messages"]
+    assert messages[-1] == {"role": "assistant", "content": "Revenue rose 5.9% QoQ [M1]."}
+    assert any(expander.label == "Sources cited (1)" for expander in at.expander)
+    assert "Chat uses the configured LLM over the synthetic demo analysis." in _all_text(at)
+
+
+def test_chat_provider_error_is_safe_and_history_stays_answerable():
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("httpx.stream", side_effect=_stream_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+        patch(
+            "src.api.main.OpenRouterChatClient.from_env",
+            side_effect=LLMTransportError("provider body sk-or-SECRET"),
+        ),
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+        at.chat_input[0].set_value("Main risks?").run()
+
+    assert not at.exception
+    assert at.session_state["chat_messages"] == []
+    text = _all_text(at)
+    assert "The assistant could not answer (LLM_PROVIDER_ERROR)." in text
+    assert "SECRET" not in text
+
+
+def test_new_analysis_clears_chat_history():
+    fake = _FakeChatClient(["Answer [S1]."])
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("httpx.stream", side_effect=_stream_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+        patch("src.api.main.OpenRouterChatClient.from_env", return_value=fake),
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+        at.chat_input[0].set_value("Summarize").run()
+        assert len(at.session_state["chat_messages"]) == 2
+        _button(at, "Analyze filing").click().run()
+
+    assert not at.exception
+    assert at.session_state["chat_messages"] == []

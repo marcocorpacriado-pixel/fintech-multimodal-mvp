@@ -203,3 +203,35 @@ prompts, API keys, authorization headers, source documents, or stack traces.
 Fallback selection belongs in Marco's orchestration layer or deployment
 configuration, never inside `build_analysis_handoff` and never as an automatic
 response to a failed real call.
+
+## Filing chat over the handoff
+
+`POST /api/v1/chat` answers follow-up questions about an analysis that has
+already been verified. The handoff is the model's only context: the endpoint
+never re-reads the filing, XBRL or retrieval output.
+
+- **Stateless:** the UI sends the full `AnalysisHandoff` plus the conversation
+  (`messages`: `user`/`assistant` turns, max 20, max 2000 chars each, last turn
+  from `user`) on every request. The server stores nothing.
+- **Context:** `src.integration.build_chat_context` renders the handoff with
+  stable citation tags: metrics `[M1..]`, positives `[P1..]`, risks `[R1..]`,
+  outlook `[O1]`, summary `[S1]`. Values are copied verbatim.
+  `CHAT_SYSTEM_PROMPT` requires citing these tags and answering "That isn't
+  covered by this analysis" when the context has no answer. It forbids
+  investment advice and tells the model to treat quoted evidence as data.
+- **Guard:** a handoff with `verification.valid == false` is rejected with
+  `INPUT_ERROR`.
+- **Streaming:** response is `text/plain` streamed tokens
+  (`OpenRouterChatClient`, same `OPENROUTER_*` variables as the analysis;
+  no `temperature` is sent, so the model default applies).
+  Provider/config failures before the first token return the usual
+  `IntegrationError` JSON. A failure mid-stream appends the fixed marker
+  `[stream interrupted]`.
+- **Voice:** `POST /api/v1/audio/transcribe` takes a raw `audio/wav` body
+  (≤ 25 MB) and returns `{text, language}` via Cristian's Groq STT.
+  `POST /api/v1/audio/summary` now accepts an optional `language`. Without it,
+  the Kokoro language is derived from the voice prefix (`ef_*` → Spanish).
+- **UI:** the "Ask" tab maps cited tags to labels with
+  `src.visualization.presentation.chat_citation_labels`, which mirrors
+  `citation_index` and has a test to keep both in sync. It strips tags before
+  TTS.

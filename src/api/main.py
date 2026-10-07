@@ -8,20 +8,23 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import Body, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.audio import list_voices
-from src.audio.tts import synthesize
+from src.audio.stt import MAX_FILE_SIZE_MB, transcribe
+from src.audio.tts import language_for_voice, synthesize
 from src.extraction import (
     AnalysisPipelineResult,
+    OpenRouterChatClient,
     OpenRouterLLMClient,
     SECInputError,
     discover_sec_filings,
@@ -31,10 +34,13 @@ from src.extraction import (
 )
 from src.extraction.schemas import FilingType
 from src.integration import (
+    CHAT_SYSTEM_PROMPT,
     AnalysisHandoff,
     AnalysisMode,
+    ChatRequest,
     IntegrationError,
     build_analysis_handoff,
+    build_chat_context,
     diagnose_integration_failure,
     map_integration_error,
 )
@@ -44,6 +50,10 @@ logger = logging.getLogger(__name__)
 
 DEMO_FIXTURE_PATH = Path(__file__).with_name("demo_fixture.json")
 DEFAULT_VOICE = "af_heart"
+MAX_TRANSCRIBE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+# Fixed, non-revealing marker appended when the provider fails mid-stream:
+# the 200 status is already committed, so the error cannot be a JSON body.
+STREAM_INTERRUPTED_MARKER = "\n\n[stream interrupted]"
 _ERROR_STATUS = {
     "INPUT_ERROR": 422,
     "FILING_NOT_FOUND": 404,
@@ -91,6 +101,14 @@ class FilingMetadataResponse(StrictModel):
 class AudioSummaryRequest(StrictModel):
     text: str = Field(min_length=1, max_length=5000)
     voice: str | None = DEFAULT_VOICE
+    # Kokoro language; when omitted it is derived from the voice prefix so a
+    # Spanish voice (ef_*) is not pronounced with English phonemes.
+    language: str | None = None
+
+
+class TranscriptionResponse(StrictModel):
+    text: str
+    language: str
 
 
 class HealthResponse(StrictModel):
@@ -275,8 +293,9 @@ def analysis(request: AnalysisRequest):
 )
 def audio_summary(request: AudioSummaryRequest):
     # Sync def: FastAPI runs it in the threadpool, so Kokoro never blocks the loop.
+    language = request.language or language_for_voice(request.voice)
     try:
-        result = synthesize(text=request.text, voice=request.voice)
+        result = synthesize(text=request.text, voice=request.voice, language=language)
     except (ValueError, AssertionError):  # Kokoro asserts on unknown voices
         return _error_response(
             IntegrationError(
@@ -298,3 +317,102 @@ def audio_summary(request: AudioSummaryRequest):
             },
         )
     return Response(content=result.audio_bytes, media_type="audio/wav")
+
+
+@app.post(
+    "/api/v1/audio/transcribe",
+    response_model=TranscriptionResponse,
+    responses=_ERROR_RESPONSES,
+)
+def audio_transcribe(
+    audio: bytes = Body(..., media_type="audio/wav"),
+):
+    """Speech-to-text for chat questions. Raw audio body, no multipart."""
+
+    if not audio or len(audio) > MAX_TRANSCRIBE_BYTES:
+        return _error_response(
+            IntegrationError(
+                code="INPUT_ERROR",
+                message="The audio is empty or exceeds the supported size.",
+                retryable=False,
+            )
+        )
+    try:
+        result = transcribe(audio)
+    except ValueError:
+        return _error_response(
+            IntegrationError(
+                code="INPUT_ERROR",
+                message="The audio could not be transcribed.",
+                retryable=False,
+            )
+        )
+    except Exception:
+        logger.exception("transcribe failed")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": IntegrationError(
+                    code="UNKNOWN_ERROR",
+                    message="Speech recognition is currently unavailable.",
+                    retryable=True,
+                ).model_dump()
+            },
+        )
+    return {"text": result.text, "language": result.language}
+
+
+@app.post(
+    "/api/v1/chat",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/plain": {}}}, **_ERROR_RESPONSES},
+)
+def chat(request: ChatRequest):
+    """Stream an answer grounded only in the verified handoff sent by the client."""
+
+    request_id = uuid.uuid4().hex
+    if not request.handoff.verification.valid:
+        return _error_response(
+            IntegrationError(
+                code="INPUT_ERROR",
+                message="Chat is unavailable for analyses that failed verification.",
+                retryable=False,
+            )
+        )
+    system_prompt = (
+        f"{CHAT_SYSTEM_PROMPT}\n{build_chat_context(request.handoff)}"
+    )
+    try:
+        stream = OpenRouterChatClient.from_env().open(
+            system_prompt=system_prompt,
+            messages=[message.model_dump() for message in request.messages],
+        )
+    except Exception as error:
+        diagnostic = diagnose_integration_failure(error)
+        logger.warning(
+            "chat failed request_id=%s category=%s reason=%s",
+            request_id,
+            diagnostic.category,
+            diagnostic.reason_code,
+        )
+        return _error_response(map_integration_error(error))
+
+    def tokens() -> Iterator[str]:
+        try:
+            yield from stream
+        except Exception as error:
+            diagnostic = diagnose_integration_failure(error)
+            logger.warning(
+                "chat stream interrupted request_id=%s category=%s reason=%s",
+                request_id,
+                diagnostic.category,
+                diagnostic.reason_code,
+            )
+            yield STREAM_INTERRUPTED_MARKER
+
+    return StreamingResponse(
+        tokens(),
+        media_type="text/plain; charset=utf-8",
+        # Disable proxy buffering so tokens reach the browser as they arrive.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

@@ -12,6 +12,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -29,6 +30,7 @@ from src.visualization.financial_charts import (  # noqa: E402
     render_metrics_comparison_chart,
 )
 from src.visualization.presentation import (  # noqa: E402
+    cited_sources,
     error_presentation,
     filing_option_label,
     format_display_date,
@@ -38,12 +40,21 @@ from src.visualization.presentation import (  # noqa: E402
     select_executive_metrics,
     sentiment_label,
     sort_filings,
+    text_for_speech,
     verification_label,
 )
 
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 DEFAULT_VOICES = ["af_heart"]
+CHAT_SUGGESTIONS = (
+    "What drove the change in revenue?",
+    "What are the main risks?",
+    "What does management expect going forward?",
+)
+# Default Kokoro voice for a transcribed question language (prefix = language).
+CHAT_VOICE_BY_LANGUAGE = {"es": "ef_dora", "en": "af_heart"}
+CHAT_STATE_KEYS = ("chat_messages", "chat_audio", "chat_error", "chat_pending")
 SENTIMENT_COLORS = {
     "positive": "green",
     "negative": "red",
@@ -573,6 +584,163 @@ def render_technical_details(handoff: dict[str, Any]) -> None:
         )
 
 
+def _stream_chat_answer(payload: dict[str, Any]) -> Iterator[str]:
+    """Yield answer text from the streaming chat endpoint.
+
+    Errors are stored in session state instead of raised so ``st.write_stream``
+    simply ends and the caller can render safe guidance.
+    """
+
+    try:
+        with httpx.stream(
+            "POST",
+            f"{API_URL}/api/v1/chat",
+            json=payload,
+            timeout=httpx.Timeout(120, connect=10),
+        ) as response:
+            if not response.is_success:
+                response.read()
+                st.session_state.chat_error = parse_api_error(response)
+                return
+            yield from response.iter_text()
+    except httpx.HTTPError:
+        st.session_state.chat_error = {
+            "code": "API_UNAVAILABLE",
+            "message": "",
+            "retryable": True,
+            "status_code": None,
+        }
+
+
+def _transcribe_question(audio: Any) -> str | None:
+    """Send a recorded question to the STT endpoint; return its text."""
+
+    with st.spinner("Transcribing question"):
+        response, error = api_request(
+            "POST",
+            "/api/v1/audio/transcribe",
+            content=audio.getvalue(),
+            headers={"Content-Type": "audio/wav"},
+            timeout=60,
+        )
+    if response is None:
+        st.session_state.chat_error = error
+        return None
+    body = response.json()
+    voice = CHAT_VOICE_BY_LANGUAGE.get(str(body.get("language")))
+    if voice:
+        # Applied on the next run, before the voice selectbox is instantiated.
+        st.session_state.chat_voice_next = voice
+    return str(body.get("text") or "").strip() or None
+
+
+def _chat_markdown(text: str) -> str:
+    """Escape untrusted text (no LaTeX from "$") but keep its line breaks."""
+
+    return md_escape(text).replace("\n", "  \n")
+
+
+def _render_chat_message(index: int, message: dict[str, Any], handoff: dict[str, Any]) -> None:
+    with st.chat_message(message["role"]):
+        st.markdown(_chat_markdown(message["content"]))
+        if message["role"] != "assistant":
+            return
+        sources = cited_sources(message["content"], handoff)
+        if sources:
+            with st.expander(f"Sources cited ({len(sources)})"):
+                for tag, label in sources:
+                    st.markdown(f"**{tag}** · {md_escape(label)}")
+        audio_cache: dict[int, bytes] = st.session_state.setdefault("chat_audio", {})
+        if index in audio_cache:
+            st.audio(audio_cache[index], format="audio/wav")
+        elif st.button("Listen", key=f"chat_tts_{index}", icon=":material/volume_up:"):
+            with st.spinner("Generating audio"):
+                response, error = api_request(
+                    "POST",
+                    "/api/v1/audio/summary",
+                    json={
+                        "text": text_for_speech(message["content"])[:5000],
+                        "voice": st.session_state.get("chat_voice", "af_heart"),
+                    },
+                    timeout=300,
+                )
+            if response is not None:
+                audio_cache[index] = response.content
+                st.rerun()
+            elif error is not None:
+                render_error(error, allow_retry=False)
+
+
+def render_chat(handoff: dict[str, Any]) -> None:
+    """Conversational Q&A grounded only in the displayed analysis."""
+
+    st.subheader("Ask about this filing")
+    if handoff["pipeline_metadata"]["analysis_mode"] == "demo":
+        st.caption("Chat uses the configured LLM over the synthetic demo analysis.")
+    else:
+        st.caption(
+            "Answers use only the verified results above and cite them, e.g. [M1]."
+        )
+    voices = fetch_voices()
+    next_voice = st.session_state.pop("chat_voice_next", None)
+    if next_voice in voices:
+        st.session_state.chat_voice = next_voice
+    st.selectbox(
+        "Answer voice",
+        voices,
+        index=voices.index("af_heart") if "af_heart" in voices else 0,
+        key="chat_voice",
+    )
+
+    messages: list[dict[str, Any]] = st.session_state.setdefault("chat_messages", [])
+    if not messages:
+        columns = st.columns(len(CHAT_SUGGESTIONS))
+        for column, suggestion in zip(columns, CHAT_SUGGESTIONS):
+            if column.button(suggestion, width="stretch"):
+                st.session_state.chat_pending = suggestion
+
+    history = st.container(height=520 if messages else "content", border=False)
+    with history:
+        for index, message in enumerate(messages):
+            _render_chat_message(index, message, handoff)
+
+    submitted = st.chat_input("Ask about this filing…", accept_audio=True)
+    question = st.session_state.pop("chat_pending", None)
+    if submitted is not None:
+        st.session_state.pop("chat_error", None)
+        question = submitted.text.strip() or None
+        if question is None and submitted.audio is not None:
+            question = _transcribe_question(submitted.audio)
+
+    if question:
+        st.session_state.pop("chat_error", None)
+        messages.append({"role": "user", "content": question})
+        payload = {"handoff": handoff, "messages": messages}
+        with history:
+            _render_chat_message(len(messages) - 1, messages[-1], handoff)
+            raw_chunks: list[str] = []
+
+            def escaped_stream() -> Iterator[str]:
+                for chunk in _stream_chat_answer(payload):
+                    raw_chunks.append(chunk)
+                    yield _chat_markdown(chunk)
+
+            with st.chat_message("assistant"):
+                st.write_stream(escaped_stream())
+        answer = "".join(raw_chunks)
+        if answer.strip():
+            messages.append({"role": "assistant", "content": answer})
+            st.rerun()
+        else:
+            messages.pop()  # keep history valid: it must end with an answered turn
+
+    error = st.session_state.get("chat_error")
+    if error is not None:
+        code = str(error.get("code") or "UNKNOWN_ERROR")
+        st.error(f"The assistant could not answer ({code}).")
+        st.caption(error_presentation(code).title + " You can ask again.")
+
+
 def execute_analysis(payload: dict[str, Any]) -> None:
     """Run one request with a neutral, honest loading state."""
 
@@ -582,6 +750,7 @@ def execute_analysis(payload: dict[str, Any]) -> None:
         "audio_mode",
         "analysis_error",
         "summary_copy_ready",
+        *CHAT_STATE_KEYS,
     ):
         st.session_state.pop(key, None)
     st.session_state.last_request = payload
@@ -616,13 +785,17 @@ def render_result(handoff: dict[str, Any]) -> None:
         render_technical_details(handoff)
         return
 
-    overview, financials, narrative, sources = st.tabs(
+    overview, financials, narrative, sources, ask = st.tabs(
         [
             ":material/dashboard: Overview",
             ":material/monitoring: Financials",
             ":material/article: Narrative",
             ":material/verified_user: Sources",
-        ]
+            ":material/forum: Ask",
+        ],
+        # Keyed + rerun so the active tab survives reruns triggered by the chat.
+        key="result_tabs",
+        on_change="rerun",
     )
     with overview:
         render_executive_snapshot(handoff)
@@ -636,6 +809,8 @@ def render_result(handoff: dict[str, Any]) -> None:
         render_sources(handoff)
         render_verification_details(handoff["verification"])
         render_technical_details(handoff)
+    with ask:
+        render_chat(handoff)
 
 
 def main() -> None:

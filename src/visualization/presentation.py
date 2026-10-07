@@ -192,6 +192,48 @@ def select_executive_metrics(
     return selected[:limit]
 
 
+_CHAT_CITATION_RE = re.compile(r"\[([MPROS]\d+)\]")
+_CHAT_STREAM_MARKER = "[stream interrupted]"
+
+
+def chat_citation_labels(handoff: Mapping[str, Any]) -> dict[str, str]:
+    """Citation tag → label, in the same order the chat API tags its context.
+
+    Mirrors ``src.integration.chat_context.citation_index`` (the UI may not
+    import integration code); a test keeps both in sync.
+    """
+
+    labels: dict[str, str] = {}
+    for index, metric in enumerate(handoff.get("financial_metrics") or [], start=1):
+        labels[f"M{index}"] = f"Metric: {metric.get('name')}"
+    for index, item in enumerate(handoff.get("positives") or [], start=1):
+        labels[f"P{index}"] = f"Positive: {item.get('finding')}"
+    for index, item in enumerate(handoff.get("risks") or [], start=1):
+        labels[f"R{index}"] = f"Risk: {item.get('finding')}"
+    labels["O1"] = "Management outlook"
+    labels["S1"] = "Executive summary"
+    return labels
+
+
+def cited_sources(answer: str, handoff: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """Known citation tags used in an answer, in first-appearance order."""
+
+    labels = chat_citation_labels(handoff)
+    seen: dict[str, str] = {}
+    for tag in _CHAT_CITATION_RE.findall(answer):
+        if tag in labels and tag not in seen:
+            seen[tag] = labels[tag]
+    return list(seen.items())
+
+
+def text_for_speech(answer: str) -> str:
+    """Drop citation tags and stream markers before sending text to TTS."""
+
+    text = answer.replace(_CHAT_STREAM_MARKER, "")
+    text = re.sub(r"\s*\[[MPROS]\d+\]", "", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
 def sentiment_label(outlook: Mapping[str, Any]) -> str:
     """Sentiment badge text, with the scoring model's confidence when provided."""
 
@@ -311,6 +353,8 @@ def human_source_label(filing_type: str, source_section: str | None) -> str:
 
 __all__ = [
     "ErrorPresentation",
+    "chat_citation_labels",
+    "cited_sources",
     "error_presentation",
     "filing_option_label",
     "format_display_date",
@@ -322,5 +366,6 @@ __all__ = [
     "select_executive_metrics",
     "sentiment_label",
     "sort_filings",
+    "text_for_speech",
     "verification_label",
 ]
