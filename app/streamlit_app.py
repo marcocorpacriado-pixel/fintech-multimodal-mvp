@@ -440,6 +440,13 @@ def render_outlook(outlook: dict[str, Any]) -> None:
                 sentiment_label(outlook),
                 color=SENTIMENT_COLORS.get(outlook["sentiment"], "gray"),
             )
+        if outlook.get("rationale_sentence"):
+            score = outlook.get("rationale_score")
+            score_text = "" if score is None else f" ({score * 100:.1f}%)"
+            st.markdown(
+                f"> 📌 **Key evidence detected{score_text}:** "
+                f"\"{md_escape(outlook['rationale_sentence'])}\""
+            )
         st.markdown(md_escape(outlook["summary"]))
 
 

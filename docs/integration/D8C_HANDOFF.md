@@ -74,6 +74,8 @@ Reduced JSON shape:
     "sentiment": "unknown",
     "confidence": null,
     "model": null,
+    "rationale_sentence": null,
+    "rationale_score": null,
     "source_ids": []
   },
   "executive_summary": "...",

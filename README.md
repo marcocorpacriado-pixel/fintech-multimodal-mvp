@@ -77,7 +77,9 @@ El sentimiento de `management_outlook` lo puntúa FinBERT (`ProsusAI/finbert`,
 vía `transformers`) sobre el resumen grounded, con `confidence` y `model` en el
 handoff. Si el modelo no carga (sin red, sin dependencias) se conserva la
 etiqueta del LLM con `confidence`/`model` a `null`. Un outlook `unknown` sin
-evidencia nunca se reclasifica.
+evidencia nunca se reclasifica. `rationale_sentence`/`rationale_score` recogen
+la oración literal del filing citado (de los `source_ids` del outlook) que
+FinBERT puntúa más alto para esa polaridad.
 
 ## Grounding y verificación
 
