@@ -1,0 +1,176 @@
+# =============================================================================
+#  Build + push + deploy a Cloud Run (equivalente CI de scripts/build_and_push.sh)
+# =============================================================================
+#  - push a main          → nueva revisión con el 100 % del tráfico.
+#  - Run workflow (manual) sobre cualquier rama:
+#      promote=false (def) → revisión "preview" SIN tráfico, con URL propia
+#                            https://<tag>---<servicio>-....run.app
+#      promote=true        → igual que main: la revisión recibe el 100 %.
+#
+#  Auth: Workload Identity Federation (sin JSON keys). Ver iac/github_actions.tf.
+#  Variables de repo necesarias (Settings → Secrets and variables → Variables):
+#      GCP_WIF_PROVIDER  ← `terraform output -raw github_wif_provider`
+#      GCP_DEPLOYER_SA   ← `terraform output -raw github_deployer_sa`
+# =============================================================================
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      promote:
+        description: "Enviar el 100 % del tráfico a esta revisión (si no, solo URL preview)"
+        type: boolean
+        default: false
+
+env:
+  PROJECT_ID: ml-miax
+  REGION: europe-southwest1
+  BASE_NAME: fintech-mvp
+  SERVICE_NAME: fintech-mvp
+
+# Un deploy a la vez; no cancelamos el que esté en curso para no dejar
+# revisiones a medias.
+concurrency:
+  group: cloudrun-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # token OIDC para Workload Identity Federation
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: ${{ (github.ref == 'refs/heads/main' || inputs.promote) && 'production' || 'preview' }}
+      url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compute image tags
+        id: meta
+        run: |
+          HOST="${REGION}-docker.pkg.dev"
+          REPO="${HOST}/${PROJECT_ID}/${BASE_NAME}-images/${BASE_NAME}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          # Tag de revisión Cloud Run: minúsculas, dígitos y '-', empieza por letra.
+          BRANCH_SLUG=$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-25 | sed -E 's/-+$//')
+
+          if [[ "${GITHUB_REF}" == "refs/heads/main" || "${{ inputs.promote }}" == "true" ]]; then
+            MODE=promote
+          else
+            MODE=preview
+          fi
+
+          {
+            echo "host=${HOST}"
+            echo "image=${REPO}:${SHORT_SHA}"
+            echo "image_latest=${REPO}:latest"
+            echo "rev_tag=br-${BRANCH_SLUG}"
+            echo "mode=${MODE}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+          token_format: access_token
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Login to Artifact Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ steps.meta.outputs.host }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Caché de capas en GitHub: la capa de Kokoro (~350 MB) y las deps solo
+      # se reconstruyen si cambian requirements.txt o src/audio/tts.py.
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}
+            ${{ steps.meta.outputs.mode == 'promote' && steps.meta.outputs.image_latest || '' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy revision
+        id: deploy
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          MODE: ${{ steps.meta.outputs.mode }}
+          REV_TAG: ${{ steps.meta.outputs.rev_tag }}
+        run: |
+          if [[ "${MODE}" == "promote" ]]; then
+            gcloud run deploy "${SERVICE_NAME}" \
+              --image="${IMAGE}" \
+              --region="${REGION}" \
+              --project="${PROJECT_ID}" \
+              --quiet
+
+            # Si antes hubo un deploy preview (--no-traffic), el tráfico queda
+            # fijado a una revisión concreta: lo devolvemos a LATEST.
+            gcloud run services update-traffic "${SERVICE_NAME}" \
+              --to-latest \
+              --region="${REGION}" \
+              --project="${PROJECT_ID}" \
+              --quiet
+
+            URL=$(gcloud run services describe "${SERVICE_NAME}" \
+              --region="${REGION}" --project="${PROJECT_ID}" \
+              --format='value(status.url)')
+          else
+            gcloud run deploy "${SERVICE_NAME}" \
+              --image="${IMAGE}" \
+              --region="${REGION}" \
+              --project="${PROJECT_ID}" \
+              --no-traffic \
+              --tag="${REV_TAG}" \
+              --quiet
+
+            URL=$(gcloud run services describe "${SERVICE_NAME}" \
+              --region="${REGION}" --project="${PROJECT_ID}" --format=json \
+              | jq -r --arg t "${REV_TAG}" '.status.traffic[] | select(.tag == $t) | .url')
+          fi
+
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke check
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          # Streamlit expone /_stcore/health. El cold start (min=0) puede tardar.
+          curl -fsS --retry 6 --retry-delay 10 --retry-all-errors --max-time 60 \
+            "${URL}/_stcore/health"
+
+      - name: Summary
+        if: always()
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+          MODE: ${{ steps.meta.outputs.mode }}
+        run: |
+          {
+            echo "### Cloud Run deploy (${MODE})"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Branch | \`${GITHUB_REF_NAME}\` |"
+            echo "| Image | \`${IMAGE}\` |"
+            echo "| URL | ${URL:-n/a} |"
+          } >> "$GITHUB_STEP_SUMMARY"

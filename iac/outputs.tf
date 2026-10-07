@@ -38,3 +38,13 @@ output "secret_ids" {
   description = "IDs de los secrets creados; súbeles valor desde la consola."
   value       = { for k, s in google_secret_manager_secret.secrets : k => s.secret_id }
 }
+
+output "github_wif_provider" {
+  description = "Valor para el secret/variable GCP_WIF_PROVIDER de GitHub Actions."
+  value       = google_iam_workload_identity_pool_provider.github.name
+}
+
+output "github_deployer_sa" {
+  description = "Valor para la variable GCP_DEPLOYER_SA de GitHub Actions."
+  value       = google_service_account.deployer.email
+}

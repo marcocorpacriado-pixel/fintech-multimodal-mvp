@@ -28,7 +28,7 @@ variable "base_name" {
 variable "openrouter_model" {
   type        = string
   description = "Modelo de OpenRouter (debe soportar JSON schema estructurado)."
-  default     = "anthropic/claude-3.5-sonnet"
+  default     = "anthropic/claude-sonnet-4.5"
 }
 
 variable "repo_iac_url" {
@@ -45,4 +45,10 @@ variable "repo_iac_url" {
     condition     = can(regex("^[a-z0-9_-]{1,63}$", var.repo_iac_url))
     error_message = "Solo minúsculas, dígitos, '-' y '_'; máximo 63 caracteres."
   }
+}
+
+variable "github_repository" {
+  type        = string
+  description = "Repo `owner/name` autorizado a desplegar vía GitHub Actions (WIF)."
+  default     = "marcocorpacriado-pixel/fintech-multimodal-mvp"
 }
