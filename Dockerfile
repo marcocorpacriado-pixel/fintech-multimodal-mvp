@@ -33,8 +33,13 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # --- Capa de dependencias -----------------------------------------------------
 # Sólo se invalida si cambia requirements.txt.
+# torch se instala ANTES desde el índice CPU: el wheel por defecto de PyPI trae
+# CUDA + librerías NVIDIA (~3 GB) inútiles en Cloud Run (sin GPU). Con torch ya
+# satisfecho, `pip install -r` no vuelve a bajar la variante CUDA.
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN pip install --upgrade pip \
+    && pip install torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install -r requirements.txt
 
 # --- Capa del modelo Kokoro ---------------------------------------------------
 # Copiamos ÚNICAMENTE tts.py (no todo src/) para no invalidar esta capa cada vez
@@ -68,6 +73,39 @@ print('[build]   ES OK:', r2.duration, 's,', r2.voice); \
 print('[build] Kokoro warm-up terminado.')\
 " && rm /tmp/_tts.py
 
+# --- Capa del modelo FinBERT --------------------------------------------------
+# Mismo motivo que Kokoro: en Cloud Run el disco es efímero (y en memoria), así
+# que bajar ProsusAI/finbert (~440 MB) en cada cold start sería lento y gastaría
+# RAM. Se hornea en /opt/hf y en runtime se fuerza modo offline. Reutilizamos
+# sentiment.py (solo depende de stdlib + transformers) y validamos que clasifica.
+# transformers también baja una copia safetensors desde un PR de conversión
+# automática (~440 MB duplicados); en offline solo se usa el snapshot de `main`,
+# así que el resto se elimina.
+ENV HF_HOME=/opt/hf
+COPY src/extraction/sentiment.py /tmp/_sentiment.py
+RUN python -c "\
+import importlib.util, sys; \
+spec = importlib.util.spec_from_file_location('_sentiment', '/tmp/_sentiment.py'); \
+m = importlib.util.module_from_spec(spec); \
+sys.modules['_sentiment'] = m; \
+spec.loader.exec_module(m); \
+r = m.classify_financial_sentiment('Revenue increased strongly this quarter.'); \
+assert r is not None, 'FinBERT failed to load'; \
+print('[build] FinBERT OK:', r)\
+" && rm /tmp/_sentiment.py \
+    && python -c "\
+import os, shutil; from pathlib import Path; \
+hub = Path('/opt/hf/hub'); repo = hub / 'models--ProsusAI--finbert'; \
+keep = (repo / 'refs' / 'main').read_text().strip(); \
+[shutil.rmtree(s) for s in (repo / 'snapshots').iterdir() if s.name != keep]; \
+shutil.rmtree(repo / 'refs' / 'refs', ignore_errors=True); \
+live = {os.path.realpath(f) for f in (repo / 'snapshots' / keep).iterdir()}; \
+[f.unlink() for f in (repo / 'blobs').iterdir() if os.path.realpath(f) not in live]; \
+[f.unlink() for f in hub.glob('blobs/*/*') if str(f.resolve()) not in live]; \
+shutil.rmtree('/opt/hf/xet', ignore_errors=True); \
+print('[build] FinBERT cache pruned to snapshot', keep)\
+"
+
 
 # -----------------------------------------------------------------------------
 # Stage 2: runtime — imagen final, sin toolchain de compilación
@@ -88,6 +126,7 @@ RUN useradd --create-home --uid 1000 appuser
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /opt/kokoro /opt/kokoro
+COPY --from=builder /opt/hf /opt/hf
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
@@ -95,6 +134,10 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONPATH=/app \
     # Apunta a los pesos ya horneados: tts.py los encuentra y NO descarga nada.
     KOKORO_MODEL_DIR=/opt/kokoro \
+    # FinBERT horneado: offline para que nunca intente descargar en runtime.
+    HF_HOME=/opt/hf \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
     # Cloud Run inyecta $PORT; 8080 es el default razonable en local.
     PORT=8080 \
     # Puerto interno de FastAPI (no se expone al exterior).
