@@ -15,12 +15,14 @@ from typing import Any, Literal, Mapping, Sequence
 
 _TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,14}$")
 _WORD_RE = re.compile(r"(\w+)")
-# DESIGN.md tokens: positive-growth, error red, accent-blue.
-_HEATMAP_RGB = {
-    "positive": (16, 185, 129),
-    "negative": (239, 68, 68),
-    "neutral": (56, 189, 248),
+# Polarity colour (DESIGN.md positive-growth, crimson, accent-blue) and pill text.
+_POLARITY_STYLE = {
+    "positive": ("16, 185, 129", "#E6FFFA"),
+    "negative": ("239, 68, 68", "#FFF5F5"),
+    "neutral": ("56, 189, 248", "#F0F9FF"),
 }
+_UNSCORED_STYLE = ("148, 163, 184", "#F8FAFC")
+_MUTED = "color: #94A3B8; font-size: 12px; font-weight: 600; letter-spacing: 0.04em;"
 _SNAPSHOT_METRICS = (
     "Revenue",
     "Net Income",
@@ -207,7 +209,7 @@ def highlight_tokens_html(
     attributions: Sequence[Mapping[str, Any]],
     sentiment: str,
 ) -> str:
-    """Escaped HTML of ``sentence`` with attributed words shaded by score.
+    """Inline HTML of ``sentence`` with attributed words as score-shaded pills.
 
     Attributions come from an uncased tokenizer, so words match case-insensitively.
     Every piece of filing text is HTML-escaped; only the spans are markup.
@@ -218,7 +220,7 @@ def highlight_tokens_html(
         token = str(item.get("token") or "").lower()
         score = float(item.get("score") or 0.0)
         scores[token] = max(score, scores.get(token, 0.0))
-    red, green, blue = _HEATMAP_RGB.get(sentiment, (148, 163, 184))
+    rgb, text_color = _POLARITY_STYLE.get(sentiment, _UNSCORED_STYLE)
 
     parts = []
     for index, piece in enumerate(_WORD_RE.split(sentence)):
@@ -226,13 +228,72 @@ def highlight_tokens_html(
         score = scores.get(piece.lower(), 0.0) if index % 2 else 0.0
         if score > 0:
             parts.append(
-                f'<span title="{score:.2f}" style="background-color: '
-                f"rgba({red}, {green}, {blue}, {score * 0.4:.2f}); "
-                f'border-radius: 4px; padding: 0 2px;">{text}</span>'
+                f'<span title="Impact: {score * 100:.1f}% (Integrated Gradients)" '
+                f"style=\"background: rgba({rgb}, {0.15 + score * 0.45:.2f}); "
+                f"border: 1px solid rgba({rgb}, {0.3 + score * 0.5:.2f}); "
+                f"color: {text_color}; border-radius: 4px; padding: 2px 6px; "
+                f'margin: 0 2px; cursor: help;">{text}</span>'
             )
         else:
             parts.append(text)
-    return f'<p style="line-height: 1.9; margin: 0;">{"".join(parts)}</p>'
+    return "".join(parts)
+
+
+def outlook_xai_html(outlook: Mapping[str, Any]) -> str:
+    """FinBERT outlook block: polarity header, summary, cited rationale heatmap, legend.
+
+    Built for ``st.html``; all API text is HTML-escaped.
+    """
+
+    sentiment = str(outlook.get("sentiment") or "unknown")
+    rgb, _ = _POLARITY_STYLE.get(sentiment, _UNSCORED_STYLE)
+    facts = []
+    if outlook.get("confidence") is not None:
+        facts.append(f"Confidence: {outlook['confidence'] * 100:.1f}%")
+    if outlook.get("model"):
+        facts.append(f"Model: {html.escape(str(outlook['model']))}")
+    blocks = [
+        '<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; '
+        'margin-bottom: 12px;">'
+        f'<span style="background: rgba({rgb}, 0.16); border: 1px solid rgba({rgb}, 0.6); '
+        f"color: rgb({rgb}); border-radius: 999px; padding: 3px 12px; font-size: 12px; "
+        'font-weight: 700; letter-spacing: 0.04em;">'
+        f"&#9679; POLARITY: {html.escape(sentiment.upper())}</span>"
+        f'<span style="{_MUTED}">{" · ".join(facts)}</span></div>',
+        '<p style="color: #F8FAFC; line-height: 1.6; margin: 0 0 14px;">'
+        f"{html.escape(str(outlook.get('summary') or ''))}</p>",
+    ]
+
+    sentence = outlook.get("rationale_sentence")
+    if sentence:
+        attributions = outlook.get("token_attributions") or []
+        score = outlook.get("rationale_score")
+        score_text = "" if score is None else f" · FinBERT {score * 100:.1f}%"
+        blocks.append(
+            f'<figure style="margin: 0; padding: 14px 18px; background: #1E293B; '
+            f'border: 1px solid #334155; border-left: 3px solid rgb({rgb}); '
+            'border-radius: 8px;">'
+            f'<figcaption style="{_MUTED} text-transform: uppercase; margin-bottom: 8px;">'
+            f"Key evidence detected{score_text}</figcaption>"
+            '<blockquote style="margin: 0; color: #F8FAFC; font-size: 15px; '
+            'line-height: 2.1;">'
+            f'<span style="color: rgb({rgb}); font-size: 22px; line-height: 0;">&ldquo;</span>'
+            f"{highlight_tokens_html(sentence, attributions, sentiment)}"
+            f'<span style="color: rgb({rgb}); font-size: 22px; line-height: 0;">&rdquo;</span>'
+            "</blockquote></figure>"
+        )
+        if attributions:
+            blocks.append(
+                f'<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; '
+                f'margin-top: 10px; {_MUTED}">'
+                "Low impact"
+                f'<span style="display: inline-block; width: 84px; height: 8px; '
+                f"border-radius: 4px; background: linear-gradient(90deg, "
+                f'rgba({rgb}, 0.15), rgba({rgb}, 0.6));"></span>'
+                "High impact · Integrated Gradients attribution · hover a word for its weight"
+                "</div>"
+            )
+    return "".join(blocks)
 
 
 def human_source_label(filing_type: str, source_section: str | None) -> str:
@@ -251,6 +312,7 @@ __all__ = [
     "format_metric_period",
     "highlight_tokens_html",
     "human_source_label",
+    "outlook_xai_html",
     "normalize_ticker_for_ui",
     "select_executive_metrics",
     "sentiment_label",

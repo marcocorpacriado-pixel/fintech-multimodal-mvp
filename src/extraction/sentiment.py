@@ -16,6 +16,14 @@ from typing import Any, Literal, TypedDict
 FINBERT_MODEL = "ProsusAI/finbert"
 _LABELS = {"positive", "negative", "neutral"}
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+# Function words carry gradient mass but no financial meaning; dropped from attributions.
+STOPWORDS = frozenset(
+    {
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in",
+        "is", "it", "its", "of", "on", "or", "our", "that", "the", "their",
+        "this", "to", "was", "were", "with",
+    }
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +114,10 @@ def explain_sentiment_tokens(
     Input x Gradient, which saturates on BERT and tends to rank function words
     such as "management" above the sentiment-bearing ones.
 
-    WordPiece pieces are summed back into words, special tokens dropped, and
-    only words that support the class (positive attribution) are returned,
-    scaled by the maximum to ``(0, 1]`` and sorted by score. Any failure
-    returns ``[]``.
+    WordPiece pieces are summed back into words, special tokens, punctuation
+    and ``STOPWORDS`` dropped, and only words that support the class (positive
+    attribution) are returned, scaled by the maximum of what remains to
+    ``(0, 1]`` and sorted by score. Any failure returns ``[]``.
     """
 
     if not text.strip():
@@ -162,7 +170,11 @@ def _merge_wordpieces(
 
 
 def _normalize_words(words: list[tuple[str, float]]) -> list[TokenAttribution]:
-    supporting = [(word, score) for word, score in words if score > 0 and word.isalnum()]
+    supporting = [
+        (word, score)
+        for word, score in words
+        if score > 0 and word.isalnum() and word not in STOPWORDS
+    ]
     if not supporting:
         return []
     top = max(score for _, score in supporting)
@@ -173,6 +185,7 @@ def _normalize_words(words: list[tuple[str, float]]) -> list[TokenAttribution]:
 __all__ = [
     "FINBERT_MODEL",
     "FinancialSentiment",
+    "STOPWORDS",
     "SentimentRationale",
     "TokenAttribution",
     "classify_financial_sentiment",

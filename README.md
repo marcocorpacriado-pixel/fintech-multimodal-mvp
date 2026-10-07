@@ -81,7 +81,8 @@ evidencia nunca se reclasifica. `rationale_sentence`/`rationale_score` recogen
 la oración literal del filing citado (de los `source_ids` del outlook) que
 FinBERT puntúa más alto para esa polaridad. `token_attributions` lista las
 palabras de esa oración que sostienen la clase (Integrated Gradients sobre los
-word embeddings, 32 pasos; `steps=1` equivale a Input × Gradient), normalizadas
+word embeddings, 32 pasos; `steps=1` equivale a Input × Gradient), sin
+`STOPWORDS` ni puntuación, renormalizadas
 a `(0, 1]` y mostradas como heatmap en la tarjeta del outlook.
 
 ## Grounding y verificación

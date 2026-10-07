@@ -13,6 +13,7 @@ from src.visualization.presentation import (
     format_metric_period,
     highlight_tokens_html,
     human_source_label,
+    outlook_xai_html,
     normalize_ticker_for_ui,
     select_executive_metrics,
     sentiment_label,
@@ -229,20 +230,55 @@ def test_sentiment_label_shows_model_confidence_only_when_scored(outlook, expect
     assert sentiment_label(outlook) == expected
 
 
-def test_token_heatmap_shades_attributed_words_and_escapes_filing_text():
+def test_token_heatmap_pills_scale_with_score_and_escape_filing_text():
     html = highlight_tokens_html(
         "Continued Demand <script>x</script> grew.",
         [{"token": "demand", "score": 1.0}, {"token": "continued", "score": 0.5}],
         "positive",
     )
 
-    assert "rgba(16, 185, 129, 0.40)" in html and ">Demand</span>" in html
-    assert "rgba(16, 185, 129, 0.20)" in html and ">Continued</span>" in html
+    assert "background: rgba(16, 185, 129, 0.60)" in html  # 0.15 + 1.0 * 0.45
+    assert "border: 1px solid rgba(16, 185, 129, 0.80)" in html
+    assert "background: rgba(16, 185, 129, 0.38)" in html  # 0.15 + 0.5 * 0.45
+    assert 'title="Impact: 50.0% (Integrated Gradients)"' in html
+    assert ">Demand</span>" in html and ">Continued</span>" in html
     assert "<script>" not in html and "&lt;script&gt;" in html
     assert html.count("<span") == 2
 
 
-def test_token_heatmap_uses_red_for_negative_sentiment():
+def test_token_heatmap_uses_crimson_for_negative_sentiment():
     html = highlight_tokens_html("Demand fell.", [{"token": "fell", "score": 0.5}], "negative")
 
-    assert "rgba(239, 68, 68, 0.20)" in html
+    assert "rgba(239, 68, 68, 0.38)" in html and "color: #FFF5F5" in html
+
+
+def _scored_outlook(**overrides):
+    outlook = {
+        "summary": "Outlook <b>summary</b>.",
+        "sentiment": "positive",
+        "confidence": 0.942,
+        "model": "ProsusAI/finbert",
+        "rationale_sentence": "Demand growth continued.",
+        "rationale_score": 0.946,
+        "token_attributions": [{"token": "demand", "score": 1.0}],
+    }
+    outlook.update(overrides)
+    return outlook
+
+
+def test_outlook_xai_block_shows_polarity_evidence_heatmap_and_legend():
+    html = outlook_xai_html(_scored_outlook())
+
+    assert "POLARITY: POSITIVE" in html
+    assert "Confidence: 94.2% · Model: ProsusAI/finbert" in html
+    assert "Key evidence detected · FinBERT 94.6%" in html
+    assert ">Demand</span>" in html and "Low impact" in html
+    assert "<b>" not in html and "&lt;b&gt;summary" in html
+
+
+def test_outlook_xai_block_omits_heatmap_legend_without_attributions():
+    html = outlook_xai_html(_scored_outlook(token_attributions=[]))
+
+    assert "Key evidence detected" in html
+    assert "Low impact" not in html
+    assert "Low impact" not in outlook_xai_html(_scored_outlook(rationale_sentence=None))

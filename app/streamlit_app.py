@@ -33,8 +33,8 @@ from src.visualization.presentation import (  # noqa: E402
     filing_option_label,
     format_display_date,
     format_metric_period,
-    highlight_tokens_html,
     human_source_label,
+    outlook_xai_html,
     select_executive_metrics,
     sentiment_label,
     sort_filings,
@@ -451,34 +451,15 @@ def render_findings(handoff: dict[str, Any]) -> None:
 
 def render_outlook(outlook: dict[str, Any]) -> None:
     with st.container(border=True):
-        heading, badge = st.columns([3, 2], vertical_alignment="center")
-        with heading:
-            st.subheader("Management outlook")
-        with badge:
+        st.subheader("Management outlook")
+        if outlook.get("confidence") is None:  # LLM-only label: no FinBERT evidence
             st.badge(
                 sentiment_label(outlook),
                 color=SENTIMENT_COLORS.get(outlook["sentiment"], "gray"),
             )
-        if outlook.get("rationale_sentence"):
-            score = outlook.get("rationale_score")
-            score_text = "" if score is None else f" ({score * 100:.1f}%)"
-            st.markdown(
-                f"> 📌 **Key evidence detected{score_text}:** "
-                f"\"{md_escape(outlook['rationale_sentence'])}\""
-            )
-            if outlook.get("token_attributions"):
-                st.html(
-                    highlight_tokens_html(
-                        outlook["rationale_sentence"],
-                        outlook["token_attributions"],
-                        outlook["sentiment"],
-                    )
-                )
-                st.caption(
-                    "Keywords behind FinBERT's classification "
-                    "(Integrated Gradients · Input × Gradient attribution)"
-                )
-        st.markdown(md_escape(outlook["summary"]))
+            st.markdown(md_escape(outlook["summary"]))
+            return
+        st.html(outlook_xai_html(outlook))
 
 
 def render_summary(handoff: dict[str, Any]) -> None:

@@ -107,8 +107,12 @@ def test_demo_analysis_renders_professional_dashboard():
     assert "Financial Intelligence Copilot" in text
     assert "VERIFIED WITH WARNINGS" in text
     assert "POSITIVE · 94.2% confidence · FinBERT" in text
-    assert "Key evidence detected (94.6%)" in text
-    assert "Keywords behind FinBERT's classification" in text
+    outlook_html = "".join(element.proto.body for element in at.get("html"))
+    assert "POLARITY: POSITIVE" in outlook_html
+    assert "Confidence: 94.2% · Model: ProsusAI/finbert" in outlook_html
+    assert "Key evidence detected · FinBERT 94.6%" in outlook_html
+    assert 'title="Impact: 94.0% (Integrated Gradients)"' in outlook_html
+    assert ">growth</span>" in outlook_html and "Low impact" in outlook_html
     assert len(at.metric) == 11  # 4-metric snapshot plus the 7-metric financial grid
     assert at.metric[0].value == "$1.25B"
     assert "N/A" in text

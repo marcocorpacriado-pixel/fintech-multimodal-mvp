@@ -106,12 +106,13 @@
       "sentiment": "positive",
       "confidence": 0.942,
       "model": "ProsusAI/finbert",
-      "rationale_sentence": "Management expects continued demand for subscription services.",
+      "rationale_sentence": "Management expects continued demand growth for subscription services.",
       "rationale_score": 0.946,
       "token_attributions": [
-        {"token": "demand", "score": 0.92},
-        {"token": "continued", "score": 0.75},
-        {"token": "subscription", "score": 0.68}
+        {"token": "demand", "score": 0.94},
+        {"token": "growth", "score": 0.88},
+        {"token": "subscription", "score": 0.72},
+        {"token": "continued", "score": 0.45}
       ],
       "source_ids": ["demo-filing:chunk-0017"]
     },

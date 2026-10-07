@@ -253,6 +253,14 @@ def test_wordpieces_are_summed_and_special_tokens_dropped():
     assert words == [("increased", 0.75), ("demand", 0.3), (".", 0.2)]
 
 
+def test_stopwords_are_dropped_before_renormalizing():
+    assert sentiment._normalize_words(
+        [("in", 2.0), ("growth", 0.8), ("to", 1.5), ("the", 0.9), ("strong", 0.4)]
+    ) == [{"token": "growth", "score": 1.0}, {"token": "strong", "score": 0.5}]
+    assert sentiment._normalize_words([("of", 1.0), ("and", 0.5)]) == []
+    assert {"in", "to", "of", "the", "for"} <= sentiment.STOPWORDS
+
+
 def test_normalization_keeps_supporting_words_scaled_to_max():
     assert sentiment._normalize_words(
         [("increased", 0.8), ("demand", 0.2), ("risk", -0.5), (".", 0.9)]
