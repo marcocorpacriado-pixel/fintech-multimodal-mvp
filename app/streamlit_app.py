@@ -1,7 +1,8 @@
-"""Streamlit dashboard. Talks to the FastAPI backend over HTTP only.
+"""Professional Streamlit presentation for the FastAPI analysis contract.
 
-Never import src.extraction, src.integration or src.audio here: every value
-shown comes from the API's AnalysisHandoff JSON, rendered without recalculation.
+The UI communicates with FastAPI over HTTP only. It never imports extraction,
+integration, SEC, XBRL, LLM, or audio implementation modules, and it never
+recalculates financial metrics.
 """
 
 from __future__ import annotations
@@ -9,7 +10,9 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pandas as pd
@@ -24,6 +27,15 @@ from src.visualization.financial_charts import (  # noqa: E402
     format_value,
     render_metrics_comparison_chart,
 )
+from src.visualization.presentation import (  # noqa: E402
+    error_presentation,
+    filing_option_label,
+    format_display_date,
+    normalize_ticker_for_ui,
+    sort_filings,
+    verification_label,
+)
+
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 DEFAULT_VOICES = ["af_heart"]
@@ -37,38 +49,52 @@ SENTIMENT_COLORS = {
 
 
 def md_escape(text: str) -> str:
-    """Filing text is untrusted: stop `$`, `*`, `#`... from becoming markdown/LaTeX."""
+    """Prevent untrusted filing text from becoming Markdown or LaTeX."""
 
-    return re.sub(r"([\\`*_{}\[\]()#+\-.!|>~$<])", r"\\\1", text)
+    return re.sub(r"([\\`*_{}\[\]()#+\-.!|>~$<])", r"\\\1", str(text))
 
 
-def show_api_error(response: httpx.Response) -> None:
+def parse_api_error(response: httpx.Response) -> dict[str, Any]:
+    """Convert an API failure into the small safe shape needed by the UI."""
+
     try:
         detail = response.json().get("detail")
-    except ValueError:
+    except (ValueError, AttributeError):
         detail = None
-    if isinstance(detail, dict) and "code" in detail:
-        st.error(f"**{detail['code']}** — {md_escape(detail['message'])}")
-        if detail.get("retryable"):
-            st.caption("Error transitorio: puedes volver a intentarlo.")
-    elif response.status_code == 422:
-        st.error("La petición no es válida. Revisa los datos introducidos.")
-    else:
-        st.error(f"Error inesperado de la API (HTTP {response.status_code}).")
+    if isinstance(detail, dict) and isinstance(detail.get("code"), str):
+        return {
+            "code": detail["code"],
+            "message": str(detail.get("message") or ""),
+            "retryable": bool(detail.get("retryable")),
+            "status_code": response.status_code,
+        }
+    return {
+        "code": "INPUT_ERROR" if response.status_code == 422 else "UNKNOWN_ERROR",
+        "message": "",
+        "retryable": response.status_code >= 500,
+        "status_code": response.status_code,
+    }
 
 
-def api_request(method: str, path: str, **kwargs) -> httpx.Response | None:
-    """One HTTP call to the API; renders a clean error and returns None on failure."""
+def api_request(
+    method: str,
+    path: str,
+    **kwargs: Any,
+) -> tuple[httpx.Response | None, dict[str, Any] | None]:
+    """Make one backend request and return data or a safe presentation error."""
 
     try:
         response = httpx.request(method, f"{API_URL}{path}", **kwargs)
     except httpx.HTTPError:
-        st.error(f"No se pudo conectar con la API en {API_URL}. ¿Está arrancada?")
-        return None
+        return None, {
+            "code": "API_UNAVAILABLE",
+            "message": "",
+            "retryable": True,
+            "status_code": None,
+        }
     if response.is_success:
-        return response
-    show_api_error(response)
-    return None
+        return response, None
+    return None, parse_api_error(response)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -80,136 +106,266 @@ def fetch_voices() -> list[str]:
         return DEFAULT_VOICES
 
 
-def render_sidebar() -> tuple[dict | None, str, bool]:
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_filings(
+    ticker: str,
+    filing_type: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Fetch lightweight filing metadata; this endpoint never runs XBRL or an LLM."""
+
+    response, error = api_request(
+        "GET",
+        f"/api/v1/filings/{ticker}",
+        params={"filing_type": filing_type, "limit": 10},
+        timeout=45,
+    )
+    if response is None:
+        return [], error
+    try:
+        payload = response.json()
+    except ValueError:
+        return [], {
+            "code": "UNKNOWN_ERROR",
+            "message": "",
+            "retryable": True,
+            "status_code": response.status_code,
+        }
+    if not isinstance(payload, list):
+        return [], {
+            "code": "UNKNOWN_ERROR",
+            "message": "",
+            "retryable": True,
+            "status_code": response.status_code,
+        }
+    return sort_filings(payload), None
+
+
+def render_error(error: dict[str, Any], *, allow_retry: bool = True) -> bool:
+    """Render safe error guidance and return whether the user requested a retry."""
+
+    code = str(error.get("code") or "UNKNOWN_ERROR")
+    copy = error_presentation(code)
+    st.error(f"{copy.title} ({code})")
+    st.caption(copy.guidance)
+    if error.get("retryable") and allow_retry:
+        st.info("The selected configuration is preserved. Retry when ready.")
+        return st.button("Retry analysis", type="primary", key="retry_analysis")
+    return False
+
+
+def _render_filing_selector(
+    ticker: str,
+    filing_type: str,
+) -> dict[str, Any] | None:
+    with st.spinner("Loading available SEC filings…"):
+        filings, error = fetch_filings(ticker, filing_type)
+    if error is not None:
+        copy = error_presentation(str(error.get("code") or "UNKNOWN_ERROR"))
+        st.error(copy.title)
+        st.caption(copy.guidance)
+        if error.get("retryable") and st.button("Retry filing lookup", key="retry_filings"):
+            fetch_filings.clear()
+            st.rerun()
+        return None
+    if not filings:
+        st.info("No filings were found for this ticker and filing type.")
+        return None
+
+    labels = [filing_option_label(filing) for filing in filings]
+    selected_label = st.selectbox("SEC filing", labels, help="Newest filings appear first.")
+    selected = filings[labels.index(selected_label)]
+    st.caption(f"Accession {selected['accession']}")
+    return selected
+
+
+def _uppercase_ticker_widget() -> None:
+    value = st.session_state.get("ticker_input")
+    if isinstance(value, str):
+        st.session_state.ticker_input = value.strip().upper()
+
+
+def render_sidebar() -> tuple[dict[str, Any] | None, str, bool]:
+    """Render analysis configuration without invoking analysis itself."""
+
     with st.sidebar:
-        st.header("Análisis")
-        mode = st.radio("Modo", ["demo", "real"], horizontal=True)
-        payload: dict | None
-        if mode == "real":
-            ticker = st.text_input("Ticker", "AAPL").strip().upper()
-            filing_type = st.selectbox("Filing Type", ["10-Q", "10-K"])
-            filing_date = st.date_input("Filing Date", value=None, format="YYYY-MM-DD")
+        st.header("Analysis configuration")
+        mode = st.radio(
+            "Data mode",
+            ["Demo", "Real"],
+            horizontal=True,
+            help="Demo uses a fixture; Real contacts SEC and the configured provider.",
+        )
+        payload: dict[str, Any] | None
+        if mode == "Real":
+            st.caption("LIVE · SEC filing and configured OpenRouter model")
+            raw_ticker = st.text_input(
+                "Ticker",
+                "AAPL",
+                max_chars=15,
+                key="ticker_input",
+                on_change=_uppercase_ticker_widget,
+            )
+            ticker = normalize_ticker_for_ui(raw_ticker)
+            filing_type = st.selectbox("Filing type", ["10-Q", "10-K"])
+            selected: dict[str, Any] | None = None
+            if ticker is None:
+                st.warning("Enter a valid ticker, for example AAPL, BRK.B, or BRK-B.")
+            else:
+                if ticker != raw_ticker.strip():
+                    st.caption(f"Using normalized ticker: {ticker}")
+                selected = _render_filing_selector(ticker, filing_type)
             payload = None
-            if ticker and filing_date:
+            if ticker is not None and selected is not None:
                 payload = {
                     "ticker": ticker,
-                    "filing_date": filing_date.isoformat(),
-                    "filing_type": filing_type,
+                    "filing_date": selected["filing_date"],
+                    "filing_type": selected["form"],
                     "mode": "real",
                 }
         else:
+            st.caption("DEMO · Synthetic deterministic data")
             st.info(
-                "Modo demo: la API devuelve un fixture sintético (Demo Corp). "
-                "No se consulta la SEC ni ningún LLM."
+                "Demo mode uses a deterministic synthetic fixture. "
+                "It does not contact the SEC or an LLM."
             )
             payload = {"ticker": "DEMO", "mode": "demo"}
 
         voices = fetch_voices()
         voice = st.selectbox(
-            "Voz", voices, index=voices.index("af_heart") if "af_heart" in voices else 0
+            "Summary voice",
+            voices,
+            index=voices.index("af_heart") if "af_heart" in voices else 0,
         )
-        run = st.button("Ejecutar Análisis", type="primary", width="stretch")
+        run = st.button("Analyze filing", type="primary", width="stretch")
     return payload, voice, run
 
 
-def render_header(handoff: dict) -> None:
+def render_product_header() -> None:
+    st.title("Financial Intelligence Copilot")
+    st.caption("SEC filings · Grounded AI · Deterministic verification")
+
+
+def render_analysis_header(handoff: dict[str, Any]) -> None:
     meta = handoff["pipeline_metadata"]
-    if meta["analysis_mode"] == "real":
-        st.badge("REAL MODE", icon=":material/verified:", color="green")
+    mode = meta["analysis_mode"]
+    if mode == "real":
+        st.badge("LIVE ANALYSIS", icon=":material/verified:", color="green")
     else:
-        st.badge("DEMO MODE (SYNTHETIC DATA)", icon=":material/science:", color="orange")
-        st.warning("Datos sintéticos de demostración: no describen ninguna empresa real.")
-    st.title(f"{md_escape(handoff['company'])} ({handoff['ticker']})")
-    caption = f"{handoff['filing_type']} · Periodo {handoff['period']}"
+        st.badge("DEMO · SYNTHETIC DATA", icon=":material/science:", color="orange")
+        st.warning(
+            "This is deterministic synthetic demo data. No SEC or LLM request was made."
+        )
+
+    company, ticker = st.columns([4, 1], vertical_alignment="bottom")
+    with company:
+        st.header(md_escape(handoff["company"]))
+    with ticker:
+        st.subheader(md_escape(handoff["ticker"]))
+
+    facts = [
+        handoff["filing_type"],
+        f"Report period: {format_display_date(handoff['period'])}",
+    ]
     if meta.get("filing_date"):
-        caption += f" | Filing date {meta['filing_date']}"
-    if meta.get("provider"):
-        caption += f" · {meta['provider']}" + (f" / {meta['model']}" if meta.get("model") else "")
-    st.caption(caption)
+        facts.append(f"Filed: {format_display_date(meta['filing_date'])}")
+    st.caption(" · ".join(facts))
 
 
-def render_metrics(metrics: list[dict]) -> None:
-    st.subheader("Métricas financieras")
+def render_metrics(metrics: list[dict[str, Any]]) -> None:
+    st.subheader("Canonical financial metrics")
+    st.caption("Values and comparisons are produced by the deterministic XBRL pipeline.")
     if not metrics:
-        st.info("El análisis no devolvió métricas comparables.")
+        st.info("No comparable canonical metrics are available.")
         return
-    columns = st.columns(4)
+
+    columns = st.columns(3)
     for index, metric in enumerate(metrics):
         unit = metric["unit"]
         change = metric["change_pct"]
-        with columns[index % 4].container(border=True):
+        with columns[index % 3].container(border=True):
             st.metric(
                 metric["name"],
                 format_value(metric["current_value"], unit),
                 delta=None if change is None else format_change_pct(change),
                 delta_color="off",
             )
-            st.badge(
-                metric["comparison_type"] or "Sin comparación",
-                color="blue" if metric["comparison_type"] else "gray",
-            )
-            st.caption(
-                f"Anterior: {format_value(metric['previous_value'], unit)} · "
-                f"Δ {format_change_pct(change)}"
-            )
+            comparison = metric["comparison_type"]
+            st.badge(comparison or "NO COMPARABLE PERIOD", color="blue" if comparison else "gray")
+            previous = format_value(metric["previous_value"], unit)
+            if metric["previous_value"] is None:
+                st.caption("Previous: N/A · Not available / no comparable period")
+            else:
+                st.caption(f"Previous: {previous} · Change: {format_change_pct(change)}")
             st.caption(
                 f"{metric['current_period'] or NOT_AVAILABLE} vs "
                 f"{metric['previous_period'] or NOT_AVAILABLE}"
             )
 
-    st.plotly_chart(render_metrics_comparison_chart(metrics))
-    with st.expander("Ver tabla de métricas"):
+    st.plotly_chart(
+        render_metrics_comparison_chart(metrics),
+        width="stretch",
+        config={"displayModeBar": False},
+    )
+    with st.expander("Detailed metrics table"):
         st.dataframe(
             pd.DataFrame(
                 {
-                    "Métrica": m["name"],
-                    "Actual": format_value(m["current_value"], m["unit"]),
-                    "Anterior": format_value(m["previous_value"], m["unit"]),
-                    "Cambio": format_change_pct(m["change_pct"]),
-                    "Comparación": m["comparison_type"] or NOT_AVAILABLE,
-                    "Periodo actual": m["current_period"] or NOT_AVAILABLE,
-                    "Periodo anterior": m["previous_period"] or NOT_AVAILABLE,
+                    "Metric": metric["name"],
+                    "Current": format_value(metric["current_value"], metric["unit"]),
+                    "Previous": format_value(metric["previous_value"], metric["unit"]),
+                    "Change": format_change_pct(metric["change_pct"]),
+                    "Comparison": metric["comparison_type"] or NOT_AVAILABLE,
+                    "Current period": metric["current_period"] or NOT_AVAILABLE,
+                    "Previous period": metric["previous_period"] or NOT_AVAILABLE,
                 }
-                for m in metrics
+                for metric in metrics
             ),
             hide_index=True,
+            width="stretch",
         )
 
 
-def render_findings(handoff: dict) -> None:
+def _render_finding(item: dict[str, Any]) -> None:
+    with st.container(border=True):
+        st.markdown(f"**{md_escape(item['finding'])}**")
+        with st.expander("View evidence"):
+            st.caption(
+                f"Section: {item['source_section'] or NOT_AVAILABLE} · "
+                f"Source type: {item['source_type']}"
+            )
+            st.markdown(f"> {md_escape(item['evidence'])}")
+            st.caption("Source ID")
+            st.code(item["source_id"] or NOT_AVAILABLE, language=None, wrap_lines=True)
+
+
+def render_findings(handoff: dict[str, Any]) -> None:
     left, right = st.columns(2)
     sections = (
-        (left, "✅ Positivos", handoff["positives"]),
-        (right, "⚠️ Riesgos", handoff["risks"]),
+        (left, "Positive developments", handoff["positives"]),
+        (right, "Key risks", handoff["risks"]),
     )
     for column, title, items in sections:
         with column:
             st.subheader(title)
             if not items:
-                st.caption("Sin hallazgos con evidencia suficiente.")
+                st.caption("No sufficiently grounded findings were returned.")
             for item in items:
-                with st.container(border=True):
-                    st.markdown(f"**{md_escape(item['finding'])}**")
-                    st.markdown(f"> {md_escape(item['evidence'])}")
-                    st.caption(
-                        f"Sección: {item['source_section'] or NOT_AVAILABLE} · "
-                        f"Fuente: {item['source_type']} · {item['source_id'] or NOT_AVAILABLE}"
-                    )
+                _render_finding(item)
 
 
-def render_outlook(outlook: dict) -> None:
-    st.subheader("Management Outlook")
+def render_outlook(outlook: dict[str, Any]) -> None:
+    st.subheader("Management outlook")
     sentiment = outlook["sentiment"]
-    st.badge(f"Sentiment: {sentiment}", color=SENTIMENT_COLORS.get(sentiment, "gray"))
+    st.badge(sentiment.upper(), color=SENTIMENT_COLORS.get(sentiment, "gray"))
     st.markdown(md_escape(outlook["summary"]))
 
 
-def render_summary(handoff: dict, voice: str) -> None:
-    st.subheader("Resumen ejecutivo")
+def render_summary(handoff: dict[str, Any], voice: str) -> None:
+    st.subheader("Executive summary")
     st.markdown(md_escape(handoff["executive_summary"]))
-    if st.button("🎧 Generar Resumen en Audio"):
-        with st.spinner("Sintetizando audio (la primera vez puede descargar el modelo)..."):
-            response = api_request(
+    if st.button("Listen to summary", icon=":material/volume_up:"):
+        with st.spinner("Generating audio… Kokoro may take longer on first use."):
+            response, error = api_request(
                 "POST",
                 "/api/v1/audio/summary",
                 json={"text": handoff["executive_summary"], "voice": voice},
@@ -217,50 +373,117 @@ def render_summary(handoff: dict, voice: str) -> None:
             )
         if response is not None:
             st.session_state.audio = response.content
+            st.session_state.audio_mode = handoff["pipeline_metadata"]["analysis_mode"]
+        elif error is not None:
+            render_error(error, allow_retry=False)
     if "audio" in st.session_state:
         st.audio(st.session_state.audio, format="audio/wav")
-        if handoff["pipeline_metadata"]["analysis_mode"] == "demo":
-            st.caption("Audio generado a partir de un análisis DEMO con datos sintéticos.")
+        if st.session_state.get("audio_mode") == "demo":
+            st.caption("Audio generated from synthetic demo analysis.")
+        else:
+            st.caption("Audio generated from verified real analysis.")
 
 
-def render_verification(verification: dict) -> None:
-    st.subheader("Verificación")
-    if verification["valid"]:
-        st.success("El análisis superó la verificación determinista.")
+def render_verification(verification: dict[str, Any]) -> str:
+    state = verification_label(verification)
+    if state == "VERIFIED":
+        st.success("✓ Deterministic verification passed")
+    elif state == "VERIFIED WITH WARNINGS":
+        st.warning("✓ Verification passed with non-blocking warnings")
     else:
-        st.error("El análisis no superó la verificación determinista.")
-    for issue in verification["issues"]:
-        show = st.warning if issue["severity"] == "warning" else st.error
-        show(f"**{issue['code']}** · `{issue['field']}` — {md_escape(issue['message'])}")
+        st.error("Verification failed. This analysis must not be treated as valid.")
+
+    if verification["issues"]:
+        with st.expander("Verification details"):
+            for issue in verification["issues"]:
+                label = f"{issue['severity'].upper()} · {issue['code']} · {issue['field']}"
+                show = st.warning if issue["severity"] == "warning" else st.error
+                show(f"{label}: {md_escape(issue['message'])}")
+    return state
+
+
+def render_technical_details(handoff: dict[str, Any]) -> None:
+    meta = handoff["pipeline_metadata"]
+    with st.expander("Technical details"):
+        rows = {
+            "Analysis mode": str(meta["analysis_mode"]),
+            "Provider": str(meta.get("provider") or NOT_AVAILABLE),
+            "Model": str(meta.get("model") or NOT_AVAILABLE),
+            "Filing date": format_display_date(meta.get("filing_date")),
+            "Report period": format_display_date(handoff.get("period")),
+            "Retrieved evidence chunks": str(meta["retrieval_count"]),
+            "Retrieved source IDs": str(len(meta["retrieved_source_ids"])),
+            "Verification": verification_label(handoff["verification"]),
+        }
+        st.dataframe(
+            pd.DataFrame(rows.items(), columns=["Field", "Value"]),
+            hide_index=True,
+            width="stretch",
+        )
+
+
+def execute_analysis(payload: dict[str, Any]) -> None:
+    """Run one analysis request with honest coarse-grained progress copy."""
+
+    st.session_state.pop("handoff", None)
+    st.session_state.pop("audio", None)
+    st.session_state.pop("audio_mode", None)
+    st.session_state.pop("analysis_error", None)
+    st.session_state.last_request = payload
+    started = time.perf_counter()
+    with st.status("Preparing analysis…", expanded=True) as status:
+        st.write(
+            "The backend will retrieve SEC data, process the filing, generate a grounded "
+            "analysis, and verify the result. Real analysis commonly takes 25–40 seconds."
+        )
+        response, error = api_request(
+            "POST", "/api/v1/analysis", json=payload, timeout=300
+        )
+        elapsed = time.perf_counter() - started
+        if response is not None:
+            st.session_state.handoff = response.json()
+            status.update(label=f"Analysis complete in {elapsed:.1f}s", state="complete")
+        else:
+            st.session_state.analysis_error = error
+            status.update(label=f"Analysis stopped after {elapsed:.1f}s", state="error")
+    if error is not None:
+        render_error(error, allow_retry=False)
 
 
 def main() -> None:
-    st.set_page_config(page_title="Fintech Multimodal", page_icon="📊", layout="wide")
+    st.set_page_config(
+        page_title="Financial Intelligence Copilot",
+        page_icon=":material/query_stats:",
+        layout="wide",
+    )
+    render_product_header()
     payload, voice, run = render_sidebar()
 
-    if run:
-        st.session_state.pop("handoff", None)
-        st.session_state.pop("audio", None)
-        if payload is None:
-            st.sidebar.warning("Indica ticker y fecha de presentación (filing date).")
+    previous_error = st.session_state.get("analysis_error")
+    retry = render_error(previous_error) if previous_error and not run else False
+    if run or retry:
+        selected_payload = payload if run else st.session_state.get("last_request")
+        if selected_payload is None:
+            st.sidebar.warning("Select an available filing before running analysis.")
         else:
-            with st.spinner("Ejecutando análisis..."):
-                response = api_request("POST", "/api/v1/analysis", json=payload, timeout=300)
-            if response is not None:
-                st.session_state.handoff = response.json()
+            execute_analysis(selected_payload)
 
     handoff = st.session_state.get("handoff")
     if handoff is None:
-        st.title("Fintech Multimodal")
-        st.caption("Configura el análisis en la barra lateral y pulsa «Ejecutar Análisis».")
+        if st.session_state.get("analysis_error") is None:
+            st.info("Configure an analysis in the sidebar, then select **Analyze filing**.")
         return
 
-    render_header(handoff)
+    render_analysis_header(handoff)
+    verification_state = render_verification(handoff["verification"])
+    if verification_state == "FAILED VERIFICATION":
+        render_technical_details(handoff)
+        return
     render_metrics(handoff["financial_metrics"])
     render_findings(handoff)
     render_outlook(handoff["management_outlook"])
     render_summary(handoff, voice)
-    render_verification(handoff["verification"])
+    render_technical_details(handoff)
 
 
 main()

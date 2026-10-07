@@ -129,6 +129,13 @@ streamlit run app/streamlit_app.py
 La UI usa `http://localhost:8000` por defecto. Para otro backend, configura
 `API_URL` antes de arrancar Streamlit.
 
+La interfaz de producto usa inglés de forma consistente con las métricas
+canónicas y el análisis generado. En modo real valida el ticker y consulta el
+endpoint ligero de filings para ofrecer un selector por report date, filing
+date y formulario; el usuario no necesita conocer la filing date exacta. Los
+errores de SEC, proveedor, grounding y verificación se presentan sin detalles
+sensibles ni fallback automático a demo.
+
 - **Modo demo (por defecto):** la API carga el fixture sintético
   `src/api/demo_fixture.json`; no consulta SEC ni llama a un LLM.
 - **Modo real:** requiere `EDGAR_IDENTITY`, `OPENROUTER_API_KEY` y

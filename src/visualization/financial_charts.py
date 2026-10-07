@@ -9,10 +9,10 @@ from __future__ import annotations
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-NOT_AVAILABLE = "N/D"
+NOT_AVAILABLE = "N/A"
 CURRENT_COLOR = "#2a78d6"   # categorical slot 1 (blue)
-PREVIOUS_COLOR = "#eb6834"  # categorical slot 2 (orange)
-UNIT_LABELS = {"usd": "USD", "usdPerShare": "USD por acción"}
+PREVIOUS_COLOR = "#7b8794"  # neutral comparison series
+UNIT_LABELS = {"usd": "USD values", "usdPerShare": "Per-share values"}
 
 
 def format_value(value: float | None, unit: str | None) -> str:
@@ -53,7 +53,7 @@ def _bar(metrics: list[dict], field: str, period_field: str, name: str, color: s
         ],
         hovertemplate=(
             "<b>%{y}</b><br>" + name + ": %{text}<br>"
-            "Periodo: %{customdata[0]}<br>Comparación: %{customdata[1]}<extra></extra>"
+            "Period: %{customdata[0]}<br>Comparison: %{customdata[1]}<extra></extra>"
         ),
         marker={"color": color, "cornerradius": 4},
         legendgroup=name,
@@ -75,7 +75,7 @@ def render_metrics_comparison_chart(financial_metrics: list[dict]) -> go.Figure:
     if not plottable:
         figure = go.Figure()
         figure.add_annotation(
-            text="Sin métricas comparables para graficar",
+            text="No comparable metrics available",
             showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper",
         )
         figure.update_xaxes(visible=False)
@@ -90,17 +90,17 @@ def render_metrics_comparison_chart(financial_metrics: list[dict]) -> go.Figure:
     figure = make_subplots(
         rows=len(by_unit),
         cols=1,
-        subplot_titles=[UNIT_LABELS.get(u, u or "Sin unidad") for u in by_unit],
+        subplot_titles=[UNIT_LABELS.get(u, u or "Unitless values") for u in by_unit],
         row_heights=[len(group) for group in by_unit.values()],
         vertical_spacing=0.12,
     )
     for row, group in enumerate(by_unit.values(), start=1):
         figure.add_trace(
-            _bar(group, "current_value", "current_period", "Actual", CURRENT_COLOR, row == 1),
+            _bar(group, "current_value", "current_period", "Current", CURRENT_COLOR, row == 1),
             row=row, col=1,
         )
         figure.add_trace(
-            _bar(group, "previous_value", "previous_period", "Anterior", PREVIOUS_COLOR, row == 1),
+            _bar(group, "previous_value", "previous_period", "Previous", PREVIOUS_COLOR, row == 1),
             row=row, col=1,
         )
         figure.update_yaxes(autorange="reversed", row=row, col=1)
@@ -110,7 +110,7 @@ def render_metrics_comparison_chart(financial_metrics: list[dict]) -> go.Figure:
         barmode="group",
         bargap=0.35,
         bargroupgap=0.08,
-        height=140 + 70 * len(plottable),
+        height=130 + 55 * len(plottable),
         margin={"l": 10, "r": 60, "t": 60, "b": 10},
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.04, "x": 0},
         paper_bgcolor="rgba(0,0,0,0)",

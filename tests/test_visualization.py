@@ -1,9 +1,17 @@
 import plotly.graph_objects as go
+import pytest
 
 from src.visualization.financial_charts import (
     format_change_pct,
     format_value,
     render_metrics_comparison_chart,
+)
+from src.visualization.presentation import (
+    error_presentation,
+    filing_option_label,
+    normalize_ticker_for_ui,
+    sort_filings,
+    verification_label,
 )
 
 
@@ -43,7 +51,7 @@ def test_chart_handles_empty_list():
     figure = render_metrics_comparison_chart([])
 
     assert len(figure.data) == 0
-    assert figure.layout.annotations[0].text == "Sin métricas comparables para graficar"
+    assert figure.layout.annotations[0].text == "No comparable metrics available"
 
 
 def test_chart_handles_none_values():
@@ -57,7 +65,7 @@ def test_chart_handles_none_values():
     current, previous = figure.data
     assert list(current.y) == ["Total Debt"]  # metric without any value is skipped
     assert list(previous.x) == [None]
-    assert list(previous.text) == ["N/D"]
+    assert list(previous.text) == ["N/A"]
     figure.to_json()  # serializes without errors
 
     assert len(render_metrics_comparison_chart(metrics[1:]).data) == 0
@@ -67,12 +75,75 @@ def test_format_change_pct_uses_percentage_points_as_is():
     assert format_change_pct(-1.589) == "-1.59%"
     assert format_change_pct(5.932) == "+5.93%"
     assert format_change_pct(0.0) == "+0.00%"
-    assert format_change_pct(None) == "N/D"
+    assert format_change_pct(None) == "N/A"
 
 
 def test_format_value():
-    assert format_value(None, "usd") == "N/D"
+    assert format_value(None, "usd") == "N/A"
     assert format_value(1_250_000_000.0, "usd") == "$1.25B"
     assert format_value(-210_000_000.0, "usd") == "-$210.00M"
     assert format_value(1.42, "usdPerShare") == "$1.42"
     assert format_value(3.0, "shares") == "3.00 shares"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("AAPL", "AAPL"),
+        ("aapl", "AAPL"),
+        (" BRK.B ", "BRK.B"),
+        ("BRK-B", "BRK-B"),
+        ("", None),
+        ("@@@", None),
+        ("AAPL$", None),
+        ("AAPL INC", None),
+    ],
+)
+def test_ui_ticker_validation_matches_backend_contract(raw, expected):
+    assert normalize_ticker_for_ui(raw) == expected
+
+
+def test_filing_options_are_human_readable_and_newest_first():
+    older = {
+        "filing_date": "2026-05-01",
+        "report_date": "2026-03-28",
+        "form": "10-Q",
+        "accession": "older",
+    }
+    amendment = {
+        "filing_date": "2026-08-04",
+        "report_date": "2026-06-27",
+        "form": "10-Q/A",
+        "accession": "amendment",
+    }
+
+    ordered = sort_filings([older, amendment])
+
+    assert [item["accession"] for item in ordered] == ["amendment", "older"]
+    assert filing_option_label(ordered[0]) == (
+        "Report Jun 27, 2026 · Filed Aug 04, 2026 · 10-Q/A"
+    )
+
+
+@pytest.mark.parametrize(
+    ("code", "title_fragment"),
+    [
+        ("INPUT_ERROR", "configuration"),
+        ("FILING_NOT_FOUND", "not found"),
+        ("SEC_INGESTION_ERROR", "SEC data"),
+        ("LLM_PROVIDER_ERROR", "AI provider"),
+        ("GROUNDING_ERROR", "evidence checks"),
+    ],
+)
+def test_error_copy_is_actionable_and_category_specific(code, title_fragment):
+    assert title_fragment in error_presentation(code).title
+
+
+def test_verification_labels_distinguish_valid_warning_and_failure():
+    assert verification_label({"valid": True, "issues": []}) == "VERIFIED"
+    assert verification_label(
+        {"valid": True, "issues": [{"severity": "warning"}]}
+    ) == "VERIFIED WITH WARNINGS"
+    assert verification_label(
+        {"valid": False, "issues": [{"severity": "error"}]}
+    ) == "FAILED VERIFICATION"
