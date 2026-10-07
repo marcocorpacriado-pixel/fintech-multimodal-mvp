@@ -35,19 +35,19 @@ Proporcionar una interfaz analítica institucional de alto contraste, sobria y l
 | Capa | Dónde | Qué cubre |
 |---|---|---|
 | Tema nativo | `.streamlit/config.toml` | Colores base, fuente Inter, radio 8px, bordes, tamaño de valor KPI, colores de badges |
-| CSS inyectado | `app/streamlit_app.py` (`TERMINAL_CSS`) | Padding vertical, etiquetas KPI uppercase, cabecera sticky |
-| Plotly | `src/visualization/financial_charts.py` | Fondo transparente, series, gridlines, tipografía |
+| Componentes nativos | `app/streamlit_app.py` | Jerarquía, tarjetas, pestañas y detalle expandible |
+| Plotly | `src/visualization/financial_charts.py` | Comparativas y cambios porcentuales sin recalcular métricas |
 
 Streamlit lee `.streamlit/config.toml` desde el directorio de trabajo: arrancar siempre desde la raíz (`streamlit run app/streamlit_app.py`).
 
 ## Component Layout Rules (Streamlit Native)
 
-- **Header:** Sticky/top con Ticker, Periodo, Tipo de Filing y Badge prominente REAL / DEMO.
+- **Header:** Ticker, periodo reportado, filing date, tipo de filing y estado LIVE / DEMO.
 - **Tabs (`st.tabs`):**
-  1. **🎙️ Resumen Ejecutivo & Audio:** Card destacada con briefing narrativo y reproductor multimedia con selector de voz de Kokoro.
-  2. **📊 Desglose Financiero & Gráficos:** Grid superior de KPIs en 4 columnas, gráfico Plotly a ancho completo y expander colapsable con tabla completa de métricas.
-  3. **⚖️ Drivers & Riesgos:** 2 columnas balanceadas con tarjetas de evidencias y citas normativas literales.
-  4. **🛡️ Compliance & Verificación:** Estado del verificador determinista, metadatos del pipeline y avisos técnicos sin alarmismo.
+  1. **Overview:** snapshot ejecutivo y mensajes clave.
+  2. **Financials:** siete métricas canónicas, gráficos y tabla detallada.
+  3. **Narrative:** positivos, riesgos, outlook, resumen ejecutivo y TTS.
+  4. **Sources:** evidencia, verificación y detalles técnicos.
 
 ## Rules: Do
 

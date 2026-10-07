@@ -27,6 +27,10 @@ coordinación explícita. No introducir llamadas a modelos en UI o visualizació
 5. `src/visualization/` y `app/`: presentación Streamlit/Plotly de Marco, que
    consume FastAPI solo por HTTP.
 
+En real mode, `filing_date` selecciona la presentación SEC. El `period` del
+handoff representa exclusivamente el periodo financiero reportado. El
+discovery ligero `GET /api/v1/filings/{ticker}` no ejecuta XBRL ni LLM.
+
 Las cinco capas están integradas en `integration/final-mvp`.
 
 La UI debe consumir `AnalysisHandoff`: nunca recalcula métricas, interpreta

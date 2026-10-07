@@ -287,6 +287,19 @@ class AnalysisPipelineResult(ExtractionSchema):
     retrieved_source_ids: list[Annotated[str, Field(min_length=1)]] = Field(
         default_factory=list
     )
+    generation_attempts: int = Field(default=1, ge=1, le=2)
+    repair_used: bool = False
+    first_failure_category: Literal["GROUNDING_ERROR", "VERIFICATION_ERROR"] | None = None
+
+    @model_validator(mode="after")
+    def validate_generation_metadata(self) -> Self:
+        """Repair metadata must agree: a repair means exactly two attempts."""
+
+        if self.repair_used != (self.generation_attempts > 1):
+            raise ValueError("repair_used must match generation_attempts > 1")
+        if self.repair_used != (self.first_failure_category is not None):
+            raise ValueError("first_failure_category requires a repair attempt")
+        return self
 
     @model_validator(mode="after")
     def validate_retrieval_metadata(self) -> Self:

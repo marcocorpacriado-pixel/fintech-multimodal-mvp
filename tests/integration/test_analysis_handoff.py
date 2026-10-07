@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import pytest
 
-from src.extraction.openrouter_client import LLMResponseError, LLMTransportError
+from src.extraction.openrouter_client import (
+    LLMResponseError,
+    LLMTotalDeadlineError,
+    LLMTransportError,
+)
 from src.extraction.pipeline import (
+    GenerationAttempt,
     GroundedAnalysisError,
+    ModelOutputProblem,
+    ModelOutputRejectedError,
     PipelineAnalysisError,
     PipelineInputError,
     PipelineVerificationError,
@@ -25,6 +33,8 @@ from src.extraction.schemas import (
 from src.extraction.sec_ingestion import (
     SECFilingNotFoundError,
     SECIngestionError,
+    SECInputError,
+    SECServiceError,
 )
 from src.integration import (
     AnalysisHandoff,
@@ -33,6 +43,7 @@ from src.integration import (
     VerificationIssueDTO,
     build_analysis_handoff,
     build_tts_input,
+    diagnose_integration_failure,
     map_integration_error,
 )
 
@@ -143,6 +154,7 @@ def handoff(pipeline_result: AnalysisPipelineResult) -> AnalysisHandoff:
         analysis_mode="demo",
         provider="fixture",
         model="deterministic-fake",
+        filing_date=date(2026, 7, 31),
     )
 
 
@@ -153,6 +165,7 @@ def test_valid_pipeline_result_builds_serializable_handoff(
 
     assert payload["company"] == "Apple Inc."
     assert payload["pipeline_metadata"]["analysis_mode"] == "demo"
+    assert payload["pipeline_metadata"]["filing_date"] == "2026-07-31"
 
 
 def test_all_seven_metrics_preserve_exact_values(
@@ -238,6 +251,53 @@ def test_pipeline_retrieval_metadata_is_preserved(
         handoff.pipeline_metadata.retrieved_source_ids
         == pipeline_result.retrieved_source_ids
     )
+
+
+def test_default_generation_metadata_reports_single_attempt(
+    handoff: AnalysisHandoff,
+) -> None:
+    meta = handoff.pipeline_metadata
+    assert (meta.generation_attempts, meta.repair_used) == (1, False)
+    assert meta.first_failure_category is None
+
+
+def test_repair_metadata_is_carried_to_the_handoff(
+    pipeline_result: AnalysisPipelineResult,
+) -> None:
+    repaired = pipeline_result.model_copy(
+        update={
+            "generation_attempts": 2,
+            "repair_used": True,
+            "first_failure_category": "GROUNDING_ERROR",
+        }
+    )
+
+    meta = build_analysis_handoff(repaired, analysis_mode="real").pipeline_metadata
+
+    assert (meta.generation_attempts, meta.repair_used) == (2, True)
+    assert meta.first_failure_category == "GROUNDING_ERROR"
+    assert "raw" not in meta.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"generation_attempts": 2, "repair_used": False},
+        {"generation_attempts": 1, "repair_used": True},
+        {"generation_attempts": 2, "repair_used": True},  # missing first failure
+        {"generation_attempts": 3, "repair_used": True,
+         "first_failure_category": "GROUNDING_ERROR"},
+    ],
+)
+def test_inconsistent_repair_metadata_is_rejected(
+    pipeline_result: AnalysisPipelineResult,
+    fields: dict[str, object],
+) -> None:
+    payload = pipeline_result.model_dump()
+    payload.update(fields)
+
+    with pytest.raises(ValueError):
+        AnalysisPipelineResult.model_validate(payload)
 
 
 def test_handoff_round_trips_through_json(handoff: AnalysisHandoff) -> None:
@@ -327,13 +387,20 @@ def test_tts_metadata_is_minimal_and_correct(
     }
 
 
+def _rejection(code: str, message: str = "rejected") -> ModelOutputRejectedError:
+    return ModelOutputRejectedError([ModelOutputProblem("output", code, message)])
+
+
 @pytest.mark.parametrize(
     ("error", "code", "retryable"),
     [
         (PipelineInputError("bad path"), "INPUT_ERROR", False),
-        (SECFilingNotFoundError("missing"), "SEC_INGESTION_ERROR", False),
+        (SECInputError("bad ticker"), "INPUT_ERROR", False),
+        (SECFilingNotFoundError("missing"), "FILING_NOT_FOUND", False),
+        (SECServiceError("network"), "SEC_INGESTION_ERROR", True),
         (SECIngestionError("network"), "SEC_INGESTION_ERROR", True),
-        (GroundedAnalysisError("citation"), "GROUNDING_ERROR", False),
+        (_rejection("INVALID_EVIDENCE_ID"), "GROUNDING_ERROR", True),
+        (GroundedAnalysisError("pre-generation input"), "GROUNDING_ERROR", False),
         (LLMTransportError("timeout"), "LLM_PROVIDER_ERROR", True),
         (PipelineAnalysisError("analysis"), "ANALYSIS_ERROR", False),
         (ValueError("unexpected"), "UNKNOWN_ERROR", False),
@@ -359,6 +426,21 @@ def test_wrapped_provider_error_is_detected() -> None:
     assert mapped.retryable is True
 
 
+def test_total_deadline_maps_to_safe_retryable_provider_error() -> None:
+    secret = "sk-or-secret-provider-body"
+    error = LLMTotalDeadlineError(secret)
+
+    mapped = map_integration_error(error)
+    diagnostic = diagnose_integration_failure(error)
+
+    assert mapped.code == "LLM_PROVIDER_ERROR"
+    assert mapped.retryable is True
+    assert secret not in mapped.model_dump_json()
+    assert diagnostic.category == "LLM_PROVIDER_ERROR"
+    assert diagnostic.reason_code == "TOTAL_DEADLINE_EXCEEDED"
+    assert secret not in diagnostic.model_dump_json()
+
+
 def test_verification_error_mapping() -> None:
     report = VerificationReport(
         valid=False,
@@ -373,7 +455,82 @@ def test_verification_error_mapping() -> None:
     )
     mapped = map_integration_error(PipelineVerificationError(report))
     assert mapped.code == "VERIFICATION_ERROR"
+    assert mapped.retryable is True
+
+
+def test_empty_retrieval_grounding_failure_is_not_retryable() -> None:
+    mapped = map_integration_error(_rejection("EMPTY_RETRIEVAL"))
+
+    assert mapped.code == "GROUNDING_ERROR"
     assert mapped.retryable is False
+
+
+def test_internal_diagnostic_exposes_verifier_codes_without_issue_text() -> None:
+    secret = "private evidence sk-or-secret"
+    report = VerificationReport(
+        valid=False,
+        issues=[
+            VerificationIssue(
+                code="UNSUPPORTED_NUMBER",
+                severity="error",
+                message=secret,
+                field="key_positive_developments[1].finding",
+            )
+        ],
+    )
+
+    diagnostic = diagnose_integration_failure(PipelineVerificationError(report))
+    payload = diagnostic.model_dump_json()
+
+    assert diagnostic.category == "VERIFICATION_ERROR"
+    assert diagnostic.reason_code == "DETERMINISTIC_VERIFICATION_REJECTED"
+    assert diagnostic.verification_issue_codes == ["UNSUPPORTED_NUMBER"]
+    assert secret not in payload
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "INVALID_EVIDENCE_ID",
+        "INVALID_OUTLOOK_EVIDENCE_ID",
+        "OUTLOOK_WITHOUT_EVIDENCE",
+        "EMPTY_RETRIEVAL",
+        "INVALID_OUTPUT_SCHEMA",
+    ],
+)
+def test_internal_grounding_diagnostic_uses_stable_safe_reason_codes(
+    code: str,
+) -> None:
+    diagnostic = diagnose_integration_failure(
+        _rejection(code, "private secret model text")
+    )
+
+    assert diagnostic.category == "GROUNDING_ERROR"
+    assert diagnostic.reason_code == code
+    assert "secret" not in diagnostic.model_dump_json()
+
+
+def test_untyped_grounding_failure_has_generic_diagnostic() -> None:
+    diagnostic = diagnose_integration_failure(GroundedAnalysisError("secret"))
+
+    assert diagnostic.reason_code == "GROUNDING_REJECTED"
+    assert "secret" not in diagnostic.model_dump_json()
+
+
+def test_diagnostic_reports_repair_trace_without_content() -> None:
+    error = PipelineAnalysisError("boom")
+    error.attempts = (
+        GenerationAttempt(1, "VERIFICATION_ERROR", ("UNSUPPORTED_NUMBER",)),
+        GenerationAttempt(2, "GROUNDING_ERROR", ("INVALID_EVIDENCE_ID",)),
+    )
+    error.__cause__ = _rejection("INVALID_EVIDENCE_ID", "private secret")
+
+    diagnostic = diagnose_integration_failure(error)
+
+    assert diagnostic.generation_attempts == 2
+    assert diagnostic.first_failure_category == "VERIFICATION_ERROR"
+    assert diagnostic.reason_code == "INVALID_EVIDENCE_ID"
+    assert "secret" not in diagnostic.model_dump_json()
 
 
 def test_serialized_errors_never_reflect_secrets_or_internal_messages() -> None:
