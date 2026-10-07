@@ -27,6 +27,7 @@ from src.visualization.financial_charts import (  # noqa: E402
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 DEFAULT_VOICES = ["af_heart"]
+DEMO_PAYLOAD = {"ticker": "DEMO", "period": "demo", "mode": "demo"}
 SENTIMENT_COLORS = {
     "positive": "green",
     "negative": "red",
@@ -146,7 +147,7 @@ def render_sidebar() -> tuple[dict | None, bool]:
                 "Modo demo: la API devuelve un fixture sintético (Demo Corp). "
                 "No se consulta la SEC ni ningún LLM."
             )
-            payload = {"ticker": "DEMO", "period": "demo", "mode": "demo"}
+            payload = DEMO_PAYLOAD
 
         run = st.button("Ejecutar Análisis", type="primary", width="stretch")
     return payload, run
@@ -298,6 +299,12 @@ def main() -> None:
     st.set_page_config(page_title="Fintech Multimodal", page_icon="📊", layout="wide")
     st.markdown(TERMINAL_CSS, unsafe_allow_html=True)  # static constant, no user data
     payload, run = render_sidebar()
+
+    # First visit: run the demo once so the dashboard is never empty. The flag
+    # stops retries if the API is down or the user later clears the report.
+    if "handoff" not in st.session_state and not st.session_state.get("demo_autoloaded"):
+        st.session_state.demo_autoloaded = True
+        payload, run = DEMO_PAYLOAD, True
 
     if run:
         st.session_state.pop("handoff", None)
