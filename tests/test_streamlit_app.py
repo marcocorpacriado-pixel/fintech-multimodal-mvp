@@ -1,6 +1,7 @@
 """Behavioral tests for the Streamlit presentation against FastAPI in-process."""
 
 import ast
+import re
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -123,6 +124,30 @@ def test_demo_analysis_renders_professional_dashboard():
     assert technical["Provider"] == "fixture"
     assert technical["Generation attempts"] == "1"
     assert technical["Repair used"] == "no"
+
+
+def test_heatmap_pills_expose_exact_impact_on_hover():
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+
+    outlook_html = "".join(element.proto.body for element in at.get("html"))
+    demand_pill = re.search(r"<span class=\"xai-pill\"[^>]*>demand</span>", outlook_html)
+    assert demand_pill, "demo 'demand' attribution (0.94) must render as a pill"
+    pill = demand_pill.group(0)
+    assert 'data-tooltip="Impact: 94.0%"' in pill
+    assert 'title="Impact: 94.0% (Integrated Gradients)"' in pill
+    assert "cursor: help" in pill and "display: inline-block" in pill
+    assert "position: relative" in pill and "pointer-events: none" not in pill
+    assert 'tabindex="0"' in pill
+
+    # The instant tooltip itself is the app's global CSS rule for the pill class.
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert ".xai-pill:hover::after" in source
+    assert "content: attr(data-tooltip)" in source
 
 
 def test_first_visit_autoloads_demo_once():

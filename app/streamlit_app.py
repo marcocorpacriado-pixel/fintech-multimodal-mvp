@@ -81,6 +81,15 @@ TERMINAL_CSS = """
     position: sticky; top: 3.75rem; z-index: 99;
     background: #0B0F19; border-bottom: 1px solid #334155; padding-bottom: 0.5rem;
 }
+/* FinBERT heatmap pills: instant tooltip (native title has a browser delay). */
+.xai-pill:hover::after, .xai-pill:focus-visible::after {
+    content: attr(data-tooltip);
+    position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+    background: #0B0F19; color: #F8FAFC; border: 1px solid #334155; border-radius: 4px;
+    padding: 2px 8px; font-size: 12px; font-weight: 600; line-height: 1.4;
+    white-space: nowrap; z-index: 1000; pointer-events: none;
+}
+.xai-pill:focus-visible { outline: 2px solid #38BDF8; outline-offset: 1px; }
 </style>
 """
 

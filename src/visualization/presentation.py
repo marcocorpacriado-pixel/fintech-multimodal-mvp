@@ -227,12 +227,17 @@ def highlight_tokens_html(
         text = html.escape(piece)
         score = scores.get(piece.lower(), 0.0) if index % 2 else 0.0
         if score > 0:
+            # data-tooltip feeds the instant CSS tooltip (.xai-pill in the app CSS);
+            # title is the native, accessible fallback; tabindex enables keyboard focus.
+            impact = f"Impact: {score * 100:.1f}%"
             parts.append(
-                f'<span title="Impact: {score * 100:.1f}% (Integrated Gradients)" '
+                f'<span class="xai-pill" tabindex="0" data-tooltip="{impact}" '
+                f'title="{impact} (Integrated Gradients)" '
                 f"style=\"background: rgba({rgb}, {0.15 + score * 0.45:.2f}); "
                 f"border: 1px solid rgba({rgb}, {0.3 + score * 0.5:.2f}); "
                 f"color: {text_color}; border-radius: 4px; padding: 2px 6px; "
-                f'margin: 0 2px; cursor: help;">{text}</span>'
+                f"margin: 0 2px; display: inline-block; position: relative; "
+                f'line-height: 1.4; cursor: help;">{text}</span>'
             )
         else:
             parts.append(text)
