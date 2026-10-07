@@ -51,6 +51,13 @@ def test_demo_analysis_renders_dashboard(app_test):
     assert len(at.metric) == 7
     assert at.metric[0].value == "$1.25B"
     assert "N/D" in text  # Total Debt has no previous value
+    assert [tab.label for tab in at.tabs] == [
+        "🎙️ Resumen Ejecutivo & Audio",
+        "📊 Desglose Financiero & Gráficos",
+        "⚖️ Drivers & Riesgos",
+        "🛡️ Compliance & Verificación",
+    ]
+    assert at.main.selectbox[0].label == "Voz (Kokoro)"  # media card, not sidebar
 
 
 def test_real_mode_selectors_build_payload_from_catalog(app_test):
@@ -94,7 +101,7 @@ def test_real_mode_without_catalog_falls_back_safely(app_test):
         at.sidebar.button[0].click().run()
 
     assert not at.exception
-    assert not at.sidebar.selectbox[:-1]  # only the voice selector remains
+    assert not at.sidebar.selectbox  # no catalog selectors without the API
     assert "catálogo" in at.sidebar.warning[0].value
     assert "handoff" not in at.session_state
 
