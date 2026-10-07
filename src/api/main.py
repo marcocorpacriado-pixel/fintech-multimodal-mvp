@@ -39,6 +39,8 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 DEMO_FIXTURE_PATH = Path(__file__).with_name("demo_fixture.json")
+# Filings verified against SEC EDGAR (data/raw/txt). Static: add rows when new filings land.
+FILINGS_CATALOG_PATH = Path(__file__).with_name("filings_catalog.json")
 DEFAULT_VOICE = "af_heart"
 _ERROR_STATUS = {
     "INPUT_ERROR": 422,
@@ -71,6 +73,22 @@ class HealthResponse(StrictModel):
 
 class VoicesResponse(StrictModel):
     voices: list[str]
+
+
+class CatalogFiling(StrictModel):
+    filing_date: date
+    period_end: date
+    period: str
+
+
+class CatalogCompany(StrictModel):
+    ticker: str
+    company: str
+    filings: dict[Literal["10-Q", "10-K"], list[CatalogFiling]]
+
+
+class FilingsCatalog(StrictModel):
+    companies: list[CatalogCompany]
 
 
 class ErrorResponse(StrictModel):
@@ -148,6 +166,13 @@ def voices() -> dict:
     except Exception:
         logger.exception("list_voices failed; returning default voice")
         return {"voices": [DEFAULT_VOICE]}
+
+
+@app.get("/api/v1/filings/catalog", response_model=FilingsCatalog)
+def filings_catalog() -> FilingsCatalog:
+    return FilingsCatalog.model_validate_json(
+        FILINGS_CATALOG_PATH.read_text(encoding="utf-8")
+    )
 
 
 @app.post(

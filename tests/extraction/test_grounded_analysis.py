@@ -323,6 +323,24 @@ def test_exact_encoding_artifact_is_preserved_and_accepted() -> None:
     assert result.key_positive_developments[0].evidence == source_text
 
 
+def test_ascii_quotes_and_dashes_match_typographic_source() -> None:
+    source_text = "The Company’s “core” margin—excluding\nFX—was stable."
+    retrieval = [make_retrieval("chunk-typo", "ITEM_2", source_text, rank=1)]
+    response = abstention_output()
+    response["key_positive_developments"] = [
+        {
+            "finding": "Core margin was stable.",
+            "evidence": "The Company's \"core\" margin-excluding FX-was stable.",
+            "source_section": "ITEM_2",
+            "source_id": "chunk-typo",
+        }
+    ]
+
+    result, _ = analyze_with(response, retrieval=retrieval)
+
+    assert result.key_positive_developments[0].evidence.startswith("The Company's")
+
+
 def test_abstention_is_valid_when_evidence_is_insufficient() -> None:
     result, _ = analyze_with(abstention_output())
 

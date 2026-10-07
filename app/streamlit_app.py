@@ -27,6 +27,7 @@ from src.visualization.financial_charts import (  # noqa: E402
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 DEFAULT_VOICES = ["af_heart"]
+DEMO_PAYLOAD = {"ticker": "DEMO", "period": "demo", "mode": "demo"}
 SENTIMENT_COLORS = {
     "positive": "green",
     "negative": "red",
@@ -34,6 +35,22 @@ SENTIMENT_COLORS = {
     "neutral": "gray",
     "unknown": "gray",
 }
+# Base tokens live in .streamlit/config.toml; this only covers what the theme can't (DESIGN.md).
+TERMINAL_CSS = """
+<style>
+[data-testid="stMainBlockContainer"] { padding-top: 4rem; padding-bottom: 1.5rem; }
+[data-testid="stMetricLabel"] p {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.04em; color: #94A3B8;
+}
+[data-testid="stMetricValue"] { font-weight: 700; }
+.st-key-report_header {
+    position: sticky; top: 3.75rem; z-index: 99;
+    background: #0B0F19; border-bottom: 1px solid #334155; padding-bottom: 0.5rem;
+}
+.st-key-report_header h1 { padding: 0.25rem 0 0; }
+</style>
+"""
 
 
 def md_escape(text: str) -> str:
@@ -80,50 +97,73 @@ def fetch_voices() -> list[str]:
         return DEFAULT_VOICES
 
 
-def render_sidebar() -> tuple[dict | None, str, bool]:
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_catalog() -> list[dict]:
+    response = httpx.request("GET", f"{API_URL}/api/v1/filings/catalog", timeout=10)
+    response.raise_for_status()
+    return response.json()["companies"]
+
+
+def fetch_catalog() -> list[dict]:
+    """SEC-verified tickers/filings; empty on failure (exceptions are not cached)."""
+
+    try:
+        return _fetch_catalog()
+    except (httpx.HTTPError, ValueError, KeyError):
+        return []
+
+
+def render_sidebar() -> tuple[dict | None, bool]:
     with st.sidebar:
         st.header("Análisis")
         mode = st.radio("Modo", ["demo", "real"], horizontal=True)
         payload: dict | None
         if mode == "real":
-            ticker = st.text_input("Ticker", "AAPL").strip().upper()
-            filing_type = st.selectbox("Filing Type", ["10-Q", "10-K"])
-            filing_date = st.date_input("Filing Date", value=None, format="YYYY-MM-DD")
             payload = None
-            if ticker and filing_date:
-                payload = {
-                    "ticker": ticker,
-                    "period": filing_date.isoformat(),
-                    "filing_type": filing_type,
-                    "mode": "real",
-                }
+            companies = fetch_catalog()
+            if not companies:
+                st.warning("No se pudo cargar el catálogo de filings de la API.")
+            else:
+                company = st.selectbox(
+                    "Ticker", companies, format_func=lambda c: f"{c['ticker']} · {c['company']}"
+                )
+                filing_type = st.selectbox("Filing Type", ["10-Q", "10-K"])
+                filing = st.selectbox(
+                    "Filing",
+                    company["filings"].get(filing_type, []),
+                    format_func=lambda f: (
+                        f"{f['filing_date']} · {f['period']} (cierre {f['period_end']})"
+                    ),
+                )
+                if filing:
+                    payload = {
+                        "ticker": company["ticker"],
+                        "period": filing["filing_date"],
+                        "filing_type": filing_type,
+                        "mode": "real",
+                    }
         else:
             st.info(
                 "Modo demo: la API devuelve un fixture sintético (Demo Corp). "
                 "No se consulta la SEC ni ningún LLM."
             )
-            payload = {"ticker": "DEMO", "period": "demo", "mode": "demo"}
+            payload = DEMO_PAYLOAD
 
-        voices = fetch_voices()
-        voice = st.selectbox(
-            "Voz", voices, index=voices.index("af_heart") if "af_heart" in voices else 0
-        )
         run = st.button("Ejecutar Análisis", type="primary", width="stretch")
-    return payload, voice, run
+    return payload, run
 
 
 def render_header(handoff: dict) -> None:
     meta = handoff["pipeline_metadata"]
-    if meta["analysis_mode"] == "real":
-        st.badge("REAL MODE", icon=":material/verified:", color="green")
-    else:
-        st.badge("DEMO MODE (SYNTHETIC DATA)", icon=":material/science:", color="orange")
+    with st.container(key="report_header"):
+        if meta["analysis_mode"] == "real":
+            st.badge("REAL MODE", icon=":material/verified:", color="green")
+        else:
+            st.badge("DEMO MODE (SYNTHETIC DATA)", icon=":material/science:", color="orange")
+        st.title(f"{md_escape(handoff['company'])} ({handoff['ticker']})")
+        st.caption(f"{handoff['filing_type']} · Periodo {handoff['period']}")
+    if meta["analysis_mode"] != "real":
         st.warning("Datos sintéticos de demostración: no describen ninguna empresa real.")
-    st.title(f"{md_escape(handoff['company'])} ({handoff['ticker']})")
-    caption = f"{handoff['filing_type']} · Periodo {handoff['period']}"
-    if meta.get("provider"):
-        caption += f" · {meta['provider']}" + (f" / {meta['model']}" if meta.get("model") else "")
-    st.caption(caption)
 
 
 def render_metrics(metrics: list[dict]) -> None:
@@ -177,8 +217,8 @@ def render_metrics(metrics: list[dict]) -> None:
 def render_findings(handoff: dict) -> None:
     left, right = st.columns(2)
     sections = (
-        (left, "✅ Positivos", handoff["positives"]),
-        (right, "⚠️ Riesgos", handoff["risks"]),
+        (left, ":green[✅ Drivers positivos]", handoff["positives"]),
+        (right, ":orange[⚠️ Riesgos]", handoff["risks"]),
     )
     for column, title, items in sections:
         with column:
@@ -202,27 +242,37 @@ def render_outlook(outlook: dict) -> None:
     st.markdown(md_escape(outlook["summary"]))
 
 
-def render_summary(handoff: dict, voice: str) -> None:
-    st.subheader("Resumen ejecutivo")
-    st.markdown(md_escape(handoff["executive_summary"]))
-    if st.button("🎧 Generar Resumen en Audio"):
-        with st.spinner("Sintetizando audio (la primera vez puede descargar el modelo)..."):
-            response = api_request(
-                "POST",
-                "/api/v1/audio/summary",
-                json={"text": handoff["executive_summary"], "voice": voice},
-                timeout=300,
-            )
-        if response is not None:
-            st.session_state.audio = response.content
-    if "audio" in st.session_state:
-        st.audio(st.session_state.audio, format="audio/wav")
-        if handoff["pipeline_metadata"]["analysis_mode"] == "demo":
-            st.caption("Audio generado a partir de un análisis DEMO con datos sintéticos.")
+def render_summary(handoff: dict) -> None:
+    with st.container(border=True):
+        st.subheader("Resumen ejecutivo")
+        st.markdown(md_escape(handoff["executive_summary"]))
+
+    with st.container(border=True):
+        st.markdown("**🎧 Briefing en audio**")
+        voices = fetch_voices()
+        voice_col, button_col = st.columns([2, 1], vertical_alignment="bottom")
+        voice = voice_col.selectbox(
+            "Voz (Kokoro)", voices, index=voices.index("af_heart") if "af_heart" in voices else 0
+        )
+        if button_col.button("Generar audio", type="primary", width="stretch"):
+            with st.spinner("Sintetizando audio (la primera vez puede descargar el modelo)..."):
+                response = api_request(
+                    "POST",
+                    "/api/v1/audio/summary",
+                    json={"text": handoff["executive_summary"], "voice": voice},
+                    timeout=300,
+                )
+            if response is not None:
+                st.session_state.audio = response.content
+        if "audio" in st.session_state:
+            st.audio(st.session_state.audio, format="audio/wav")
+            if handoff["pipeline_metadata"]["analysis_mode"] == "demo":
+                st.caption("Audio generado a partir de un análisis DEMO con datos sintéticos.")
 
 
-def render_verification(verification: dict) -> None:
-    st.subheader("Verificación")
+def render_compliance(handoff: dict) -> None:
+    verification = handoff["verification"]
+    st.subheader("Verificación determinista")
     if verification["valid"]:
         st.success("El análisis superó la verificación determinista.")
     else:
@@ -231,16 +281,36 @@ def render_verification(verification: dict) -> None:
         show = st.warning if issue["severity"] == "warning" else st.error
         show(f"**{issue['code']}** · `{issue['field']}` — {md_escape(issue['message'])}")
 
+    meta = handoff["pipeline_metadata"]
+    with st.container(border=True):
+        st.markdown("**Metadatos del pipeline**")
+        st.caption(
+            f"Modo: {meta['analysis_mode']} · Proveedor: {meta.get('provider') or NOT_AVAILABLE}"
+            f" · Modelo: {meta.get('model') or NOT_AVAILABLE}"
+            f" · Chunks recuperados: {meta['retrieval_count']}"
+        )
+        if meta["effective_queries"] or meta["retrieved_source_ids"]:
+            with st.expander("Consultas y fuentes recuperadas"):
+                st.caption("Consultas: " + md_escape(", ".join(meta["effective_queries"])))
+                st.caption("Fuentes: " + md_escape(", ".join(meta["retrieved_source_ids"])))
+
 
 def main() -> None:
     st.set_page_config(page_title="Fintech Multimodal", page_icon="📊", layout="wide")
-    payload, voice, run = render_sidebar()
+    st.markdown(TERMINAL_CSS, unsafe_allow_html=True)  # static constant, no user data
+    payload, run = render_sidebar()
+
+    # First visit: run the demo once so the dashboard is never empty. The flag
+    # stops retries if the API is down or the user later clears the report.
+    if "handoff" not in st.session_state and not st.session_state.get("demo_autoloaded"):
+        st.session_state.demo_autoloaded = True
+        payload, run = DEMO_PAYLOAD, True
 
     if run:
         st.session_state.pop("handoff", None)
         st.session_state.pop("audio", None)
         if payload is None:
-            st.sidebar.warning("Indica ticker y fecha de presentación (filing date).")
+            st.sidebar.warning("Selecciona ticker, tipo y filing del catálogo.")
         else:
             with st.spinner("Ejecutando análisis..."):
                 response = api_request("POST", "/api/v1/analysis", json=payload, timeout=300)
@@ -254,11 +324,23 @@ def main() -> None:
         return
 
     render_header(handoff)
-    render_metrics(handoff["financial_metrics"])
-    render_findings(handoff)
-    render_outlook(handoff["management_outlook"])
-    render_summary(handoff, voice)
-    render_verification(handoff["verification"])
+    summary_tab, metrics_tab, findings_tab, compliance_tab = st.tabs(
+        [
+            "🎙️ Resumen Ejecutivo & Audio",
+            "📊 Desglose Financiero & Gráficos",
+            "⚖️ Drivers & Riesgos",
+            "🛡️ Compliance & Verificación",
+        ]
+    )
+    with summary_tab:
+        render_summary(handoff)
+    with metrics_tab:
+        render_metrics(handoff["financial_metrics"])
+    with findings_tab:
+        render_findings(handoff)
+        render_outlook(handoff["management_outlook"])
+    with compliance_tab:
+        render_compliance(handoff)
 
 
 main()

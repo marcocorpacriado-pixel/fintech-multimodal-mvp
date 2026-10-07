@@ -10,8 +10,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 NOT_AVAILABLE = "N/D"
-CURRENT_COLOR = "#2a78d6"   # categorical slot 1 (blue)
-PREVIOUS_COLOR = "#eb6834"  # categorical slot 2 (orange)
+# Dark Slate Terminal tokens (DESIGN.md).
+CURRENT_COLOR = "#38BDF8"   # accent-blue
+PREVIOUS_COLOR = "#64748B"  # neutral-previous
+GRID_COLOR = "#334155"      # border-subtle
+TEXT_COLOR = "#F8FAFC"      # text-primary
+MUTED_COLOR = "#94A3B8"     # text-muted
+FONT_FAMILY = "Inter, Segoe UI, sans-serif"
 UNIT_LABELS = {"usd": "USD", "usdPerShare": "USD por acción"}
 
 
@@ -47,6 +52,7 @@ def _bar(metrics: list[dict], field: str, period_field: str, name: str, color: s
         x=[m.get(field) for m in metrics],
         text=[format_value(m.get(field), m.get("unit")) for m in metrics],
         textposition="outside",
+        textfont={"color": TEXT_COLOR},
         customdata=[
             [m.get(period_field) or NOT_AVAILABLE, m.get("comparison_type") or NOT_AVAILABLE]
             for m in metrics
@@ -80,7 +86,12 @@ def render_metrics_comparison_chart(financial_metrics: list[dict]) -> go.Figure:
         )
         figure.update_xaxes(visible=False)
         figure.update_yaxes(visible=False)
-        figure.update_layout(height=200)
+        figure.update_layout(
+            height=200,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"family": FONT_FAMILY, "color": MUTED_COLOR},
+        )
         return figure
 
     by_unit: dict[str | None, list[dict]] = {}
@@ -92,7 +103,7 @@ def render_metrics_comparison_chart(financial_metrics: list[dict]) -> go.Figure:
         cols=1,
         subplot_titles=[UNIT_LABELS.get(u, u or "Sin unidad") for u in by_unit],
         row_heights=[len(group) for group in by_unit.values()],
-        vertical_spacing=0.12,
+        vertical_spacing=0.1,
     )
     for row, group in enumerate(by_unit.values(), start=1):
         figure.add_trace(
@@ -105,14 +116,21 @@ def render_metrics_comparison_chart(financial_metrics: list[dict]) -> go.Figure:
         )
         figure.update_yaxes(autorange="reversed", row=row, col=1)
 
-    figure.update_xaxes(showticklabels=False, showgrid=False, zeroline=True)
+    figure.update_xaxes(
+        showticklabels=False, showgrid=True, gridcolor=GRID_COLOR,
+        zeroline=True, zerolinecolor=MUTED_COLOR,
+    )
+    figure.update_yaxes(tickfont={"color": TEXT_COLOR, "size": 12})
+    figure.update_annotations(font={"color": MUTED_COLOR, "size": 12})  # unit panel titles
     figure.update_layout(
         barmode="group",
         bargap=0.35,
         bargroupgap=0.08,
-        height=140 + 70 * len(plottable),
-        margin={"l": 10, "r": 60, "t": 60, "b": 10},
+        height=120 + 60 * len(plottable),
+        margin={"l": 8, "r": 56, "t": 48, "b": 8},
+        font={"family": FONT_FAMILY, "color": MUTED_COLOR, "size": 12},
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.04, "x": 0},
+        hoverlabel={"bgcolor": "#1E293B", "bordercolor": GRID_COLOR, "font_color": TEXT_COLOR},
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         uniformtext_minsize=10,
