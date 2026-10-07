@@ -107,6 +107,11 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 COPY --chown=appuser:appuser . /app
 
+# `data/` no está en git (y .dockerignore excluye sus subcarpetas), así que en
+# un build desde CI no existe; `/app` lo crea WORKDIR como root y appuser no
+# podría crearla en runtime (sec_ingestion escribe en data/processed/...).
+RUN install -d -o appuser -g appuser /app/data
+
 USER appuser
 
 EXPOSE 8080

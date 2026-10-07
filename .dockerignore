@@ -1,0 +1,42 @@
+# ---- Contexto de build: cuanto más pequeño, más rápido el `docker build` ----
+
+# Secretos: NUNCA deben entrar en la imagen.
+# La GROQ_API_KEY se inyecta en runtime (--env-file / Secret Manager).
+.env
+.env.*
+
+# Entornos y cachés locales
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Datos pesados (se regeneran con src/extraction/download_xbrl.py)
+data/raw/
+data/processed/
+data/tmp/
+
+# Material de clase y documentación pesada
+*.mp3
+*.wav
+*.pdf
+transcripccion_*.txt
+
+# Git y editores
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Herramientas
+.codegraph/
+.claude/
+
+# Docker (evita invalidar caché al editarse a sí mismo)
+Dockerfile
+.dockerignore
+docker-compose*.yml
