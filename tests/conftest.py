@@ -14,3 +14,7 @@ def _no_finbert_download(monkeypatch: pytest.MonkeyPatch) -> None:
         "src.extraction.pipeline.extract_sentiment_rationale",
         lambda text, target_sentiment: None,
     )
+    monkeypatch.setattr(
+        "src.extraction.pipeline.explain_sentiment_tokens",
+        lambda text, target_sentiment=None: [],
+    )

@@ -51,7 +51,11 @@ from .schemas import (
     Sentiment,
     VerificationReport,
 )
-from .sentiment import classify_financial_sentiment, extract_sentiment_rationale
+from .sentiment import (
+    classify_financial_sentiment,
+    explain_sentiment_tokens,
+    extract_sentiment_rationale,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -933,8 +937,15 @@ def _classify_outlook(
     scored = classify_financial_sentiment(outlook.summary)
     if scored is None:
         return outlook
+    update: dict[str, Any] = dict(scored)
     rationale = extract_sentiment_rationale(evidence_text, scored["sentiment"])
-    return outlook.model_copy(update={**scored, **(rationale or {})})
+    if rationale is not None:
+        update.update(rationale)
+        update["token_attributions"] = explain_sentiment_tokens(
+            rationale["rationale_sentence"], scored["sentiment"]
+        )
+    # Validate (not model_copy) so nested attributions become schema objects.
+    return ManagementOutlook.model_validate({**outlook.model_dump(), **update})
 
 
 def _to_evidence(finding: _GroundedFinding, catalog: EvidenceCatalog) -> Evidence:

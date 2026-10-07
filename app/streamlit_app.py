@@ -34,6 +34,7 @@ from src.visualization.presentation import (  # noqa: E402
     format_display_date,
     format_metric_period,
     human_source_label,
+    outlook_xai_html,
     select_executive_metrics,
     sentiment_label,
     sort_filings,
@@ -80,6 +81,15 @@ TERMINAL_CSS = """
     position: sticky; top: 3.75rem; z-index: 99;
     background: #0B0F19; border-bottom: 1px solid #334155; padding-bottom: 0.5rem;
 }
+/* FinBERT heatmap pills: instant tooltip (native title has a browser delay). */
+.xai-pill:hover::after, .xai-pill:focus-visible::after {
+    content: attr(data-tooltip);
+    position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+    background: #0B0F19; color: #F8FAFC; border: 1px solid #334155; border-radius: 4px;
+    padding: 2px 8px; font-size: 12px; font-weight: 600; line-height: 1.4;
+    white-space: nowrap; z-index: 1000; pointer-events: none;
+}
+.xai-pill:focus-visible { outline: 2px solid #38BDF8; outline-offset: 1px; }
 </style>
 """
 
@@ -450,22 +460,15 @@ def render_findings(handoff: dict[str, Any]) -> None:
 
 def render_outlook(outlook: dict[str, Any]) -> None:
     with st.container(border=True):
-        heading, badge = st.columns([3, 2], vertical_alignment="center")
-        with heading:
-            st.subheader("Management outlook")
-        with badge:
+        st.subheader("Management outlook")
+        if outlook.get("confidence") is None:  # LLM-only label: no FinBERT evidence
             st.badge(
                 sentiment_label(outlook),
                 color=SENTIMENT_COLORS.get(outlook["sentiment"], "gray"),
             )
-        if outlook.get("rationale_sentence"):
-            score = outlook.get("rationale_score")
-            score_text = "" if score is None else f" ({score * 100:.1f}%)"
-            st.markdown(
-                f"> 📌 **Key evidence detected{score_text}:** "
-                f"\"{md_escape(outlook['rationale_sentence'])}\""
-            )
-        st.markdown(md_escape(outlook["summary"]))
+            st.markdown(md_escape(outlook["summary"]))
+            return
+        st.html(outlook_xai_html(outlook))
 
 
 def render_summary(handoff: dict[str, Any]) -> None:

@@ -106,8 +106,14 @@
       "sentiment": "positive",
       "confidence": 0.942,
       "model": "ProsusAI/finbert",
-      "rationale_sentence": "Management expects continued demand for subscription services.",
+      "rationale_sentence": "Management expects continued demand growth for subscription services.",
       "rationale_score": 0.946,
+      "token_attributions": [
+        {"token": "demand", "score": 0.94},
+        {"token": "growth", "score": 0.88},
+        {"token": "subscription", "score": 0.72},
+        {"token": "continued", "score": 0.45}
+      ],
       "source_ids": ["demo-filing:chunk-0017"]
     },
     "executive_summary": "This is a demonstration using synthetic data for Demo Corp's quarterly report for the period ending June 30, 2026. Revenue rose about 5.9 percent year over year to 1.25 billion dollars, driven by higher subscription volumes. Net income fell about 6.7 percent to 210 million dollars, and diluted earnings per share declined to 1.42 dollars. Year to date, operating cash flow grew about 14.3 percent, while capital expenditures dropped about 20.8 percent. The main risk is liquidity: cash and cash equivalents decreased about 8.8 percent to 830 million dollars after debt repayments and capital investment. Management expects continued demand for subscription services. These figures are synthetic and do not describe any real company."
