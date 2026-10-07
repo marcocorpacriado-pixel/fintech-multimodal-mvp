@@ -80,23 +80,51 @@ def fetch_voices() -> list[str]:
         return DEFAULT_VOICES
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_catalog() -> list[dict]:
+    response = httpx.request("GET", f"{API_URL}/api/v1/filings/catalog", timeout=10)
+    response.raise_for_status()
+    return response.json()["companies"]
+
+
+def fetch_catalog() -> list[dict]:
+    """SEC-verified tickers/filings; empty on failure (exceptions are not cached)."""
+
+    try:
+        return _fetch_catalog()
+    except (httpx.HTTPError, ValueError, KeyError):
+        return []
+
+
 def render_sidebar() -> tuple[dict | None, str, bool]:
     with st.sidebar:
         st.header("Análisis")
         mode = st.radio("Modo", ["demo", "real"], horizontal=True)
         payload: dict | None
         if mode == "real":
-            ticker = st.text_input("Ticker", "AAPL").strip().upper()
-            filing_type = st.selectbox("Filing Type", ["10-Q", "10-K"])
-            filing_date = st.date_input("Filing Date", value=None, format="YYYY-MM-DD")
             payload = None
-            if ticker and filing_date:
-                payload = {
-                    "ticker": ticker,
-                    "period": filing_date.isoformat(),
-                    "filing_type": filing_type,
-                    "mode": "real",
-                }
+            companies = fetch_catalog()
+            if not companies:
+                st.warning("No se pudo cargar el catálogo de filings de la API.")
+            else:
+                company = st.selectbox(
+                    "Ticker", companies, format_func=lambda c: f"{c['ticker']} · {c['company']}"
+                )
+                filing_type = st.selectbox("Filing Type", ["10-Q", "10-K"])
+                filing = st.selectbox(
+                    "Filing",
+                    company["filings"].get(filing_type, []),
+                    format_func=lambda f: (
+                        f"{f['filing_date']} · {f['period']} (cierre {f['period_end']})"
+                    ),
+                )
+                if filing:
+                    payload = {
+                        "ticker": company["ticker"],
+                        "period": filing["filing_date"],
+                        "filing_type": filing_type,
+                        "mode": "real",
+                    }
         else:
             st.info(
                 "Modo demo: la API devuelve un fixture sintético (Demo Corp). "
@@ -240,7 +268,7 @@ def main() -> None:
         st.session_state.pop("handoff", None)
         st.session_state.pop("audio", None)
         if payload is None:
-            st.sidebar.warning("Indica ticker y fecha de presentación (filing date).")
+            st.sidebar.warning("Selecciona ticker, tipo y filing del catálogo.")
         else:
             with st.spinner("Ejecutando análisis..."):
                 response = api_request("POST", "/api/v1/analysis", json=payload, timeout=300)

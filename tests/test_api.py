@@ -17,6 +17,26 @@ def test_health():
     assert response.json() == {"status": "ok"}
 
 
+def test_filings_catalog():
+    response = client.get("/api/v1/filings/catalog")
+
+    assert response.status_code == 200
+    companies = {c["ticker"]: c for c in response.json()["companies"]}
+    assert {"AAPL", "MSFT", "NVDA", "AMZN"} <= companies.keys()
+    for company in companies.values():
+        assert company["company"]
+        assert company["filings"].keys() == {"10-Q", "10-K"}
+        for filings in company["filings"].values():
+            dates = [f["filing_date"] for f in filings]
+            assert dates and dates == sorted(dates, reverse=True)
+            assert all(f["period_end"] < f["filing_date"] for f in filings)
+    assert {
+        "filing_date": "2024-11-01",
+        "period_end": "2024-09-28",
+        "period": "FY2024",
+    } in companies["AAPL"]["filings"]["10-K"]
+
+
 def test_analysis_demo_success():
     response = client.post(
         "/api/v1/analysis",
