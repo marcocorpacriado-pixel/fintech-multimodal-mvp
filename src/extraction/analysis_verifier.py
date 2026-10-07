@@ -819,8 +819,16 @@ def _issue(
     )
 
 
+# Typographic and ASCII quotes/dashes are the same character for grounding: LLMs
+# routinely emit ' for the ’ used throughout EDGAR text. U+FFFD is deliberately
+# not folded: "repairing" an encoding artifact is not a literal copy.
+_TYPOGRAPHIC_FOLD = str.maketrans(
+    {"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-"}
+)
+
+
 def _normalized_text(value: str) -> str:
-    return " ".join(value.split()).casefold()
+    return " ".join(value.translate(_TYPOGRAPHIC_FOLD).split()).casefold()
 
 
 def _normalized_identity(value: str) -> str:
