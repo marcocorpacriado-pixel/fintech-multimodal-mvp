@@ -7,6 +7,7 @@ therefore evolve without depending on extraction-layer implementation details.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -96,6 +97,7 @@ class PipelineMetadataDTO(IntegrationSchema):
     analysis_mode: AnalysisMode
     provider: str | None = Field(default=None, min_length=1)
     model: str | None = Field(default=None, min_length=1)
+    filing_date: date | None = None
     effective_queries: list[str] = Field(default_factory=list)
     retrieval_count: int = Field(ge=0)
     retrieved_source_ids: list[str] = Field(default_factory=list)
@@ -145,6 +147,7 @@ def build_analysis_handoff(
     analysis_mode: AnalysisMode,
     provider: str | None = None,
     model: str | None = None,
+    filing_date: date | None = None,
 ) -> AnalysisHandoff:
     """Copy one pipeline result into the stable downstream DTO.
 
@@ -186,6 +189,7 @@ def build_analysis_handoff(
             analysis_mode=analysis_mode,
             provider=provider,
             model=model,
+            filing_date=filing_date,
             effective_queries=list(result.queries),
             retrieval_count=result.retrieval_count,
             retrieved_source_ids=list(result.retrieved_source_ids),

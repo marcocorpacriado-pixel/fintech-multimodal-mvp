@@ -37,6 +37,14 @@ class SECIngestionError(RuntimeError):
     """Base error for controlled SEC ingestion failures."""
 
 
+class SECInputError(SECIngestionError):
+    """Raised before network access when a SEC selector is invalid."""
+
+
+class SECServiceError(SECIngestionError):
+    """Raised when the SEC/edgartools service cannot complete a request."""
+
+
 class SECIdentityError(SECIngestionError):
     """Raised when production SEC access lacks a User-Agent identity."""
 
@@ -97,13 +105,32 @@ class SECAnalysisInputs:
 
     ticker: str
     company: str
-    period: str
+    filing_date: date
+    report_period: str
     filing_type: FilingType
     current_filing: SECFilingLike
     previous_filing: SECFilingLike
     filing_path: Path
     current_accession: str
     previous_accession: str
+
+    @property
+    def period(self) -> str:
+        """Backward-compatible alias for the financial report period."""
+
+        return self.report_period
+
+
+@dataclass(frozen=True, slots=True)
+class SECFilingMetadata:
+    """Lightweight filing metadata for discovery without document analysis."""
+
+    ticker: str
+    company: str
+    filing_date: date
+    report_date: date
+    form: FilingType
+    accession: str
 
 
 def prepare_sec_analysis_inputs(
@@ -128,7 +155,7 @@ def prepare_sec_analysis_inputs(
         amendment, then the latest filing date, then accession number.
     """
 
-    normalized_ticker = _normalize_ticker(ticker)
+    normalized_ticker = normalize_sec_ticker(ticker)
     normalized_accession = _normalize_accession(accession)
     _validate_target_selector(normalized_accession, filing_date)
     _validate_form(form)
@@ -154,7 +181,7 @@ def prepare_sec_analysis_inputs(
     except IdentityNotSetException as error:
         raise _identity_error() from error
     except Exception as error:
-        raise SECIngestionError(f"SEC filing lookup failed: {error}") from error
+        raise SECServiceError(f"SEC filing lookup failed: {error}") from error
 
     _validate_current_filing(
         current,
@@ -185,7 +212,8 @@ def prepare_sec_analysis_inputs(
     return SECAnalysisInputs(
         ticker=normalized_ticker,
         company=_company_name(company, current),
-        period=_report_date(current).isoformat(),
+        filing_date=_filing_date(current),
+        report_period=_report_date(current).isoformat(),
         filing_type=_filing_form(current),
         current_filing=current,
         previous_filing=previous,
@@ -195,12 +223,84 @@ def prepare_sec_analysis_inputs(
     )
 
 
-def _normalize_ticker(ticker: str) -> str:
+def discover_sec_filings(
+    *,
+    ticker: str,
+    form: FilingType = "10-Q",
+    limit: int = 10,
+    company_factory: SECCompanyFactory = Company,
+) -> list[SECFilingMetadata]:
+    """Return recent comparable filing metadata without loading XBRL or text.
+
+    One deterministic filing is returned per report date. When an original
+    and amendment cover the same report period, the amendment and then the
+    latest filing date/accession win, matching analysis ingestion policy.
+    """
+
+    normalized_ticker = normalize_sec_ticker(ticker)
+    _validate_form(form)
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise SECInputError("limit must be a positive integer")
+    _validate_identity_for_provider(company_factory)
+
+    try:
+        company = company_factory(normalized_ticker)
+        _validate_company_ticker(company, normalized_ticker)
+        candidates = _company_filings(
+            company,
+            form=_base_form(form),
+            amendments=True,
+            trigger_full_load=False,
+        )
+    except SECIngestionError:
+        raise
+    except IdentityNotSetException as error:
+        raise _identity_error() from error
+    except Exception as error:
+        raise SECServiceError(f"SEC filing discovery failed: {error}") from error
+
+    by_report_date: dict[date, SECFilingLike] = {}
+    for filing in candidates:
+        if _base_form(_filing_form(filing)) != _base_form(form):
+            continue
+        report_date = _report_date(filing)
+        existing = by_report_date.get(report_date)
+        if existing is None or _filing_tie_key(filing) > _filing_tie_key(existing):
+            by_report_date[report_date] = filing
+
+    selected = sorted(
+        by_report_date.values(),
+        key=lambda filing: (
+            _report_date(filing),
+            _filing_date(filing),
+            _filing_accession(filing),
+        ),
+        reverse=True,
+    )[:limit]
+    company_name = _company_name(company, selected[0]) if selected else getattr(
+        company, "name", normalized_ticker
+    )
+    return [
+        SECFilingMetadata(
+            ticker=normalized_ticker,
+            company=str(company_name).strip(),
+            filing_date=_filing_date(filing),
+            report_date=_report_date(filing),
+            form=_filing_form(filing),
+            accession=_filing_accession(filing),
+        )
+        for filing in selected
+    ]
+
+
+def normalize_sec_ticker(ticker: str) -> str:
+    """Normalize and validate the ticker syntax accepted by SEC ingestion."""
+
     if not isinstance(ticker, str):
-        raise SECIngestionError("ticker must be a string")
+        raise SECInputError("ticker must be a string")
     normalized = ticker.strip().upper()
     if not _TICKER_RE.fullmatch(normalized):
-        raise SECIngestionError(f"invalid ticker: {ticker!r}")
+        raise SECInputError(f"invalid ticker: {ticker!r}")
     return normalized
 
 
@@ -209,7 +309,7 @@ def _normalize_accession(accession: str | None) -> str | None:
         return None
     normalized = accession.strip()
     if not _ACCESSION_RE.fullmatch(normalized):
-        raise SECIngestionError(f"invalid accession: {accession!r}")
+        raise SECInputError(f"invalid accession: {accession!r}")
     return normalized
 
 
@@ -218,14 +318,14 @@ def _validate_target_selector(
     filing_date: date | None,
 ) -> None:
     if accession is None and filing_date is None:
-        raise SECIngestionError("accession or filing_date is required")
+        raise SECInputError("accession or filing_date is required")
     if filing_date is not None and not isinstance(filing_date, date):
-        raise SECIngestionError("filing_date must be a date")
+        raise SECInputError("filing_date must be a date")
 
 
 def _validate_form(form: str) -> None:
     if form not in _SUPPORTED_FORMS:
-        raise SECIngestionError(f"unsupported SEC form: {form!r}")
+        raise SECInputError(f"unsupported SEC form: {form!r}")
 
 
 def _validate_identity_for_provider(company_factory: SECCompanyFactory) -> None:
@@ -244,7 +344,7 @@ def _validate_company_ticker(company: SECCompanyLike, ticker: str) -> None:
     raw_tickers = getattr(company, "tickers", ()) or ()
     known = {str(value).strip().upper() for value in raw_tickers}
     if known and ticker not in known:
-        raise SECIngestionError(
+        raise SECInputError(
             f"SEC company tickers {sorted(known)!r} do not include {ticker!r}"
         )
 
@@ -300,7 +400,7 @@ def _company_filings(
     try:
         return tuple(result)
     except TypeError as error:
-        raise SECIngestionError(
+        raise SECServiceError(
             "edgartools returned a non-iterable filings collection"
         ) from error
 
@@ -397,7 +497,7 @@ def _require_xbrl(filing: SECFilingLike, *, label: str) -> None:
     except IdentityNotSetException as error:
         raise _identity_error() from error
     except Exception as error:
-        raise SECIngestionError(
+        raise SECServiceError(
             f"could not load XBRL for {label} "
             f"{_filing_accession(filing)!r}: {error}"
         ) from error
@@ -578,12 +678,17 @@ __all__ = [
     "DEFAULT_SEC_INGESTION_DIR",
     "SECAnalysisInputs",
     "SECCompanyFactory",
+    "SECFilingMetadata",
     "SECFilingNotFoundError",
     "SECIdentityError",
     "SECIngestionError",
+    "SECInputError",
     "SECNarrativeExtractionError",
     "SECPreviousFilingNotFoundError",
+    "SECServiceError",
     "SECXBRLUnavailableError",
     "SEC_IDENTITY_ENV_VAR",
+    "discover_sec_filings",
+    "normalize_sec_ticker",
     "prepare_sec_analysis_inputs",
 ]

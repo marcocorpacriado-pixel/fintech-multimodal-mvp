@@ -15,14 +15,16 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.audio import list_voices
 from src.audio.tts import synthesize
 from src.extraction import (
     AnalysisPipelineResult,
     OpenRouterLLMClient,
-    PipelineInputError,
+    SECInputError,
+    discover_sec_filings,
+    normalize_sec_ticker,
     prepare_sec_analysis_inputs,
     run_analysis_pipeline,
 )
@@ -42,6 +44,8 @@ DEMO_FIXTURE_PATH = Path(__file__).with_name("demo_fixture.json")
 DEFAULT_VOICE = "af_heart"
 _ERROR_STATUS = {
     "INPUT_ERROR": 422,
+    "FILING_NOT_FOUND": 404,
+    "SEC_INGESTION_ERROR": 503,
     "VERIFICATION_ERROR": 422,
     "GROUNDING_ERROR": 422,
     "LLM_PROVIDER_ERROR": 503,
@@ -53,11 +57,33 @@ class StrictModel(BaseModel):
 
 
 class AnalysisRequest(StrictModel):
-    ticker: str = Field(min_length=1, max_length=10)
-    # Real mode: SEC filing date (YYYY-MM-DD), the selector Dani's ingestion supports.
-    period: str = Field(min_length=1, max_length=32)
+    ticker: str
+    filing_date: date | None = None
     filing_type: FilingType = "10-Q"
     mode: AnalysisMode = "demo"
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker(cls, value: str) -> str:
+        try:
+            return normalize_sec_ticker(value)
+        except SECInputError as error:
+            raise ValueError("ticker has invalid SEC syntax") from error
+
+    @model_validator(mode="after")
+    def require_real_filing_date(self):
+        if self.mode == "real" and self.filing_date is None:
+            raise ValueError("filing_date is required in real mode")
+        return self
+
+
+class FilingMetadataResponse(StrictModel):
+    ticker: str
+    company: str
+    filing_date: date
+    report_date: date
+    form: FilingType
+    accession: str
 
 
 class AudioSummaryRequest(StrictModel):
@@ -78,7 +104,7 @@ class ErrorResponse(StrictModel):
 
 
 _ERROR_RESPONSES = {
-    status: {"model": ErrorResponse} for status in (422, 500, 503)
+    status: {"model": ErrorResponse} for status in (404, 422, 500, 503)
 }
 
 app = FastAPI(title="Fintech Multimodal API")
@@ -109,14 +135,12 @@ def _run_demo_analysis() -> AnalysisHandoff:
 def _run_real_analysis(request: AnalysisRequest) -> AnalysisHandoff:
     """SEC ingestion -> grounded pipeline -> handoff. No fallback to demo."""
 
-    try:
-        filing_date = date.fromisoformat(request.period)
-    except ValueError as error:
-        raise PipelineInputError("period must be an ISO date") from error
+    if request.filing_date is None:  # guarded by AnalysisRequest validation
+        raise AssertionError("real analysis requires filing_date")
 
     inputs = prepare_sec_analysis_inputs(
         ticker=request.ticker,
-        filing_date=filing_date,
+        filing_date=request.filing_date,
         form=request.filing_type,
     )
     with OpenRouterLLMClient.from_env() as llm:
@@ -124,20 +148,58 @@ def _run_real_analysis(request: AnalysisRequest) -> AnalysisHandoff:
             filing_path=inputs.filing_path,
             company=inputs.company,
             ticker=inputs.ticker,
-            period=inputs.period,
+            period=inputs.report_period,
             filing_type=inputs.filing_type,
             current_xbrl_filing=inputs.current_filing,
             previous_xbrl_filing=inputs.previous_filing,
             llm_client=llm,
         )
         return build_analysis_handoff(
-            result, analysis_mode="real", provider="openrouter", model=llm.model
+            result,
+            analysis_mode="real",
+            provider="openrouter",
+            model=llm.model,
+            filing_date=inputs.filing_date,
         )
 
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get(
+    "/api/v1/filings/{ticker}",
+    response_model=list[FilingMetadataResponse],
+    responses=_ERROR_RESPONSES,
+)
+def filings(
+    ticker: str,
+    filing_type: FilingType = "10-Q",
+    limit: int = 10,
+):
+    """Discover recent filing metadata without XBRL or LLM execution."""
+
+    try:
+        values = discover_sec_filings(
+            ticker=ticker,
+            form=filing_type,
+            limit=limit,
+        )
+    except Exception as error:
+        logger.exception("filing discovery failed")
+        return _error_response(map_integration_error(error))
+    return [
+        FilingMetadataResponse(
+            ticker=value.ticker,
+            company=value.company,
+            filing_date=value.filing_date,
+            report_date=value.report_date,
+            form=value.form,
+            accession=value.accession,
+        ).model_dump(mode="json")
+        for value in values
+    ]
 
 
 @app.get("/api/v1/audio/voices", response_model=VoicesResponse)

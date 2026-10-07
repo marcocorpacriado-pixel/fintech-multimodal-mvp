@@ -820,7 +820,9 @@ def _issue(
 
 
 def _normalized_text(value: str) -> str:
-    return " ".join(value.split()).casefold()
+    """Normalize rendering whitespace while preserving source case/content."""
+
+    return " ".join(value.split())
 
 
 def _normalized_identity(value: str) -> str:

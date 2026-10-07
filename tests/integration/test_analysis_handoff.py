@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import pytest
 
@@ -25,6 +26,8 @@ from src.extraction.schemas import (
 from src.extraction.sec_ingestion import (
     SECFilingNotFoundError,
     SECIngestionError,
+    SECInputError,
+    SECServiceError,
 )
 from src.integration import (
     AnalysisHandoff,
@@ -143,6 +146,7 @@ def handoff(pipeline_result: AnalysisPipelineResult) -> AnalysisHandoff:
         analysis_mode="demo",
         provider="fixture",
         model="deterministic-fake",
+        filing_date=date(2026, 7, 31),
     )
 
 
@@ -153,6 +157,7 @@ def test_valid_pipeline_result_builds_serializable_handoff(
 
     assert payload["company"] == "Apple Inc."
     assert payload["pipeline_metadata"]["analysis_mode"] == "demo"
+    assert payload["pipeline_metadata"]["filing_date"] == "2026-07-31"
 
 
 def test_all_seven_metrics_preserve_exact_values(
@@ -331,7 +336,9 @@ def test_tts_metadata_is_minimal_and_correct(
     ("error", "code", "retryable"),
     [
         (PipelineInputError("bad path"), "INPUT_ERROR", False),
-        (SECFilingNotFoundError("missing"), "SEC_INGESTION_ERROR", False),
+        (SECInputError("bad ticker"), "INPUT_ERROR", False),
+        (SECFilingNotFoundError("missing"), "FILING_NOT_FOUND", False),
+        (SECServiceError("network"), "SEC_INGESTION_ERROR", True),
         (SECIngestionError("network"), "SEC_INGESTION_ERROR", True),
         (GroundedAnalysisError("citation"), "GROUNDING_ERROR", False),
         (LLMTransportError("timeout"), "LLM_PROVIDER_ERROR", True),

@@ -32,14 +32,17 @@ from src.extraction.sec_ingestion import (
     SECFilingNotFoundError,
     SECIdentityError,
     SECIngestionError,
+    SECInputError,
     SECNarrativeExtractionError,
     SECPreviousFilingNotFoundError,
+    SECServiceError,
     SECXBRLUnavailableError,
 )
 
 
 IntegrationErrorCode = Literal[
     "INPUT_ERROR",
+    "FILING_NOT_FOUND",
     "SEC_INGESTION_ERROR",
     "ANALYSIS_ERROR",
     "LLM_PROVIDER_ERROR",
@@ -59,10 +62,13 @@ class IntegrationError(BaseModel):
     retryable: bool
 
 
-_DETERMINISTIC_SEC_ERRORS = (
-    SECIdentityError,
+_FILING_NOT_FOUND_ERRORS = (
     SECFilingNotFoundError,
     SECPreviousFilingNotFoundError,
+)
+
+_DETERMINISTIC_SEC_ERRORS = (
+    SECIdentityError,
     SECNarrativeExtractionError,
     SECXBRLUnavailableError,
 )
@@ -118,13 +124,25 @@ def map_integration_error(error: BaseException) -> IntegrationError:
             message="The language-model provider could not complete the request.",
             retryable=True,
         )
+    if _contains(chain, SECInputError):
+        return IntegrationError(
+            code="INPUT_ERROR",
+            message="The SEC request contains invalid input.",
+            retryable=False,
+        )
+    if _contains(chain, *_FILING_NOT_FOUND_ERRORS):
+        return IntegrationError(
+            code="FILING_NOT_FOUND",
+            message="The requested or comparable SEC filing was not found.",
+            retryable=False,
+        )
     if _contains(chain, *_DETERMINISTIC_SEC_ERRORS):
         return IntegrationError(
             code="SEC_INGESTION_ERROR",
             message="SEC inputs could not be prepared for analysis.",
             retryable=False,
         )
-    if _contains(chain, SECIngestionError):
+    if _contains(chain, SECServiceError, SECIngestionError):
         return IntegrationError(
             code="SEC_INGESTION_ERROR",
             message="The SEC data service could not complete the request.",

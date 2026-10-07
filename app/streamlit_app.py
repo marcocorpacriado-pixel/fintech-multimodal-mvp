@@ -93,7 +93,7 @@ def render_sidebar() -> tuple[dict | None, str, bool]:
             if ticker and filing_date:
                 payload = {
                     "ticker": ticker,
-                    "period": filing_date.isoformat(),
+                    "filing_date": filing_date.isoformat(),
                     "filing_type": filing_type,
                     "mode": "real",
                 }
@@ -102,7 +102,7 @@ def render_sidebar() -> tuple[dict | None, str, bool]:
                 "Modo demo: la API devuelve un fixture sintético (Demo Corp). "
                 "No se consulta la SEC ni ningún LLM."
             )
-            payload = {"ticker": "DEMO", "period": "demo", "mode": "demo"}
+            payload = {"ticker": "DEMO", "mode": "demo"}
 
         voices = fetch_voices()
         voice = st.selectbox(
@@ -121,6 +121,8 @@ def render_header(handoff: dict) -> None:
         st.warning("Datos sintéticos de demostración: no describen ninguna empresa real.")
     st.title(f"{md_escape(handoff['company'])} ({handoff['ticker']})")
     caption = f"{handoff['filing_type']} · Periodo {handoff['period']}"
+    if meta.get("filing_date"):
+        caption += f" | Filing date {meta['filing_date']}"
     if meta.get("provider"):
         caption += f" · {meta['provider']}" + (f" / {meta['model']}" if meta.get("model") else "")
     st.caption(caption)

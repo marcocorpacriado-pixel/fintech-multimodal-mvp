@@ -658,7 +658,9 @@ def _to_evidence(finding: _GroundedFinding) -> Evidence:
 
 
 def _normalized_text(value: str) -> str:
-    return " ".join(value.split()).casefold()
+    """Normalize rendering whitespace while preserving source case/content."""
+
+    return " ".join(value.split())
 
 
 def _stable_json(value: Any) -> str:

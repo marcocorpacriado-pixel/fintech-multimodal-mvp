@@ -20,6 +20,8 @@ HTTP endpoint, model invocation, or financial calculation.
 Use the adapter only after `run_analysis_pipeline` returns successfully:
 
 ```python
+from datetime import date
+
 from src.integration import build_analysis_handoff
 
 handoff = build_analysis_handoff(
@@ -27,6 +29,7 @@ handoff = build_analysis_handoff(
     analysis_mode="real",
     provider="openrouter",
     model="deepseek/deepseek-v4-flash",
+    filing_date=date(2026, 7, 31),
 )
 payload = handoff.model_dump(mode="json")
 ```
@@ -80,6 +83,7 @@ Reduced JSON shape:
     "analysis_mode": "real",
     "provider": "openrouter",
     "model": "deepseek/deepseek-v4-flash",
+    "filing_date": "2026-07-31",
     "effective_queries": ["revenue operating performance"],
     "retrieval_count": 1,
     "retrieved_source_ids": ["sec-filing:chunk-id"]
@@ -91,6 +95,11 @@ Marco may build metric cards and charts directly from `financial_metrics`.
 `change_pct`, period comparability, units, and `comparison_type` are canonical
 D5C output and must not be recalculated. The UI must not query XBRL, run BM25,
 interpret source identifiers, parse filings, or call the LLM.
+
+`pipeline_metadata.filing_date` is the SEC submission date selected by the
+request. Top-level `period` is the financial report period; consumers must not
+treat them as interchangeable. A selector can load lightweight metadata from
+`GET /api/v1/filings/{ticker}` before submitting the analysis request.
 
 Verification warnings can be displayed without blocking the response.
 Pipeline verification errors are raised before a handoff is returned.
@@ -149,8 +158,9 @@ Stable categories are:
 
 | Code | Typical source | Retryable policy |
 |---|---|---|
-| `INPUT_ERROR` | invalid path or pipeline input | no |
-| `SEC_INGESTION_ERROR` | SEC preparation | only generic/transient service failures |
+| `INPUT_ERROR` | invalid request, ticker, path or pipeline input | no (HTTP 422) |
+| `FILING_NOT_FOUND` | target or comparable SEC filing absent | no (HTTP 404) |
+| `SEC_INGESTION_ERROR` | SEC service/configuration/data preparation | transient service failures only (HTTP 503) |
 | `ANALYSIS_ERROR` | XBRL normalization/metric or analysis failure | no |
 | `LLM_PROVIDER_ERROR` | provider transport/response | yes, except configuration |
 | `GROUNDING_ERROR` | invalid citation/evidence | no |

@@ -288,6 +288,52 @@ def test_nonliteral_evidence_variants_are_rejected(
         analyze_with(response)
 
 
+def test_rendering_whitespace_variation_is_accepted() -> None:
+    response = valid_output()
+    response["key_positive_developments"][0]["evidence"] = (  # type: ignore[index]
+        "Revenue   growth\nreflected\tstrong demand for services."
+    )
+
+    result, _ = analyze_with(response)
+
+    assert result.key_positive_developments
+
+
+def test_case_only_evidence_change_is_rejected() -> None:
+    response = valid_output()
+    response["key_positive_developments"][0]["evidence"] = (  # type: ignore[index]
+        POSITIVE_TEXT.lower()
+    )
+
+    with pytest.raises(GroundedAnalysisError, match="not a chunk excerpt"):
+        analyze_with(response)
+
+
+@pytest.mark.parametrize(
+    ("source", "evidence"),
+    [
+        ("Revenue increased 16%.", "Revenue increased 17%."),
+        ("Revenue increased +16%.", "Revenue increased -16%."),
+        ("Revenue growth was resilient.", "Revenue expansion was resilient."),
+    ],
+    ids=["changed-number", "changed-sign", "changed-word"],
+)
+def test_material_content_changes_are_rejected(source: str, evidence: str) -> None:
+    retrieval = [make_retrieval("chunk-material", "ITEM_7", source, rank=1)]
+    response = abstention_output()
+    response["key_positive_developments"] = [
+        {
+            "finding": "Grounded claim.",
+            "evidence": evidence,
+            "source_section": "ITEM_7",
+            "source_id": "chunk-material",
+        }
+    ]
+
+    with pytest.raises(GroundedAnalysisError, match="not a chunk excerpt"):
+        analyze_with(response, retrieval=retrieval)
+
+
 def test_corrected_encoding_artifact_is_rejected() -> None:
     source_text = "The Company�s disclosure controls were effective."
     retrieval = [make_retrieval("chunk-encoding", "ITEM_1", source_text, rank=1)]

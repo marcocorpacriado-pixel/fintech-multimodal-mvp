@@ -76,6 +76,8 @@ las calcula, sustituye ni modifica.
 - Cada desarrollo positivo y riesgo necesita evidencia y un `source_id` real.
 - `source_section` debe coincidir con el chunk citado.
 - La evidencia debe ser un único extracto literal y continuo del chunk.
+- El validador tolera únicamente diferencias de whitespace introducidas por
+  rendering SEC; preserva mayúsculas, palabras, números, signos y puntuación.
 - El resumen ejecutivo solo puede mencionar cifras presentes en las métricas
   canónicas, con redondeo, dirección y tipo de comparación compatibles.
 - El verifier comprueba métricas, números narrativos, citas, grounding,
@@ -130,9 +132,28 @@ La UI usa `http://localhost:8000` por defecto. Para otro backend, configura
 - **Modo demo (por defecto):** la API carga el fixture sintético
   `src/api/demo_fixture.json`; no consulta SEC ni llama a un LLM.
 - **Modo real:** requiere `EDGAR_IDENTITY`, `OPENROUTER_API_KEY` y
-  `OPENROUTER_MODEL`. La fecha solicitada es la filing date SEC.
+  `OPENROUTER_MODEL`. El request usa `filing_date`; `period` en la respuesta
+  sigue siendo el periodo financiero reportado.
 - **Audio:** la primera síntesis puede descargar el modelo Kokoro en
   `KOKORO_MODEL_DIR` y tardar más que las siguientes.
+
+Los filings recientes pueden descubrirse sin ejecutar XBRL ni llamar al LLM:
+
+```text
+GET /api/v1/filings/{ticker}?filing_type=10-Q&limit=10
+```
+
+Cada entrada incluye `filing_date`, `report_date`, `form` y `accession`. El
+análisis real usa un request inequívoco:
+
+```json
+{
+  "ticker": "AAPL",
+  "filing_type": "10-Q",
+  "filing_date": "2026-07-31",
+  "mode": "real"
+}
+```
 
 ## Configuración
 
@@ -182,7 +203,7 @@ with OpenRouterLLMClient.from_env() as client:
         filing_path=prepared.filing_path,
         company=prepared.company,
         ticker=prepared.ticker,
-        period=prepared.period,
+        period=prepared.report_period,
         filing_type=prepared.filing_type,
         current_xbrl_filing=prepared.current_filing,
         previous_xbrl_filing=prepared.previous_filing,
@@ -193,6 +214,7 @@ with OpenRouterLLMClient.from_env() as client:
         analysis_mode="real",
         provider="openrouter",
         model=client.model,
+        filing_date=prepared.filing_date,
     )
 
 payload = handoff.model_dump(mode="json")
