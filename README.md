@@ -73,11 +73,16 @@ las calcula, sustituye ni modifica.
 
 ## Grounding y verificación
 
-- Cada desarrollo positivo y riesgo necesita evidencia y un `source_id` real.
-- `source_section` debe coincidir con el chunk citado.
-- La evidencia debe ser un único extracto literal y continuo del chunk.
-- El validador tolera únicamente diferencias de whitespace introducidas por
-  rendering SEC; preserva mayúsculas, palabras, números, signos y puntuación.
+- El backend construye un catálogo determinista de evidencias (`E01`, `E02`...):
+  cada entrada es un extracto literal del chunk recuperado, con offsets
+  trazables. El modelo solo devuelve `evidence_id`; `source_id`,
+  `source_section` y el texto citado se reconstruyen en el backend.
+- Un `evidence_id` inexistente bloquea el resultado.
+- Si una generación falla grounding o verifier, se permite como máximo UNA
+  regeneración con feedback estructurado y seguro. Nunca para errores de SEC,
+  entrada, proveedor o retrieval vacío, y nunca se relaja ninguna regla.
+- Findings, riesgos y outlook se redactan sin cifras libres: solo se admite una
+  cifra idéntica a la del extracto seleccionado.
 - El resumen ejecutivo solo puede mencionar cifras presentes en las métricas
   canónicas, con redondeo, dirección y tipo de comparación compatibles.
 - El verifier comprueba métricas, números narrativos, citas, grounding,
@@ -173,6 +178,7 @@ Configura las variables en la terminal o en un `.env` local nunca versionado.
 | `OPENROUTER_MODEL` | OpenRouter | Sí en modo real | Modelo elegido explícitamente |
 | `OPENROUTER_BASE_URL` | OpenRouter | No | Base URL compatible; tiene default |
 | `OPENROUTER_TIMEOUT_SECONDS` | OpenRouter | No | Timeout HTTP explícito |
+| `OPENROUTER_TOTAL_DEADLINE_SECONDS` | OpenRouter | No | Límite total por generación; 90 s por defecto, incluidos reintentos |
 | `OPENROUTER_MAX_RETRIES` | OpenRouter | No | Reintentos transitorios acotados |
 | `GROQ_API_KEY` | Audio STT | Sí para STT real | Groq Whisper |
 | `KOKORO_MODEL_DIR` | Audio TTS | No | Caché local de modelo y voces Kokoro |

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import math
 import os
-import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Self
 
@@ -17,6 +18,8 @@ from .pipeline import qualitative_analysis_json_schema
 
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_TOTAL_DEADLINE_SECONDS = 90.0
+MAX_TOTAL_DEADLINE_SECONDS = 600.0
 DEFAULT_MAX_RETRIES = 2
 MAX_ALLOWED_RETRIES = 5
 TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
@@ -32,6 +35,12 @@ class LLMConfigurationError(LLMProviderError):
 
 class LLMTransportError(LLMProviderError):
     """Raised when an OpenRouter HTTP request cannot complete successfully."""
+
+
+class LLMTotalDeadlineError(LLMTransportError):
+    """Raised when one complete generation exhausts its wall-clock budget."""
+
+    reason_code = "TOTAL_DEADLINE_EXCEEDED"
 
 
 class LLMResponseError(LLMProviderError):
@@ -58,17 +67,20 @@ class OpenRouterLLMClient:
         model: str,
         base_url: str = DEFAULT_OPENROUTER_BASE_URL,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        total_deadline_seconds: float = DEFAULT_TOTAL_DEADLINE_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
-        http_client: httpx.Client | None = None,
-        sleep: Callable[[float], None] = time.sleep,
+        http_transport: httpx.AsyncBaseTransport | None = None,
+        sleep: Callable[[float], Awaitable[None] | None] = asyncio.sleep,
     ) -> None:
         self._api_key = _required_secret(api_key, "OPENROUTER_API_KEY")
         self.model = _required_text(model, "OPENROUTER_MODEL")
         self.base_url = _validate_base_url(base_url)
         self.timeout_seconds = _validate_timeout(timeout_seconds)
+        self.total_deadline_seconds = _validate_total_deadline(
+            total_deadline_seconds
+        )
         self.max_retries = _validate_retries(max_retries)
-        self._http_client = http_client or httpx.Client()
-        self._owns_http_client = http_client is None
+        self._http_transport = http_transport
         self._sleep = sleep
         self.last_usage: LLMUsage | None = None
 
@@ -77,8 +89,8 @@ class OpenRouterLLMClient:
         cls,
         *,
         environ: Mapping[str, str] | None = None,
-        http_client: httpx.Client | None = None,
-        sleep: Callable[[float], None] = time.sleep,
+        http_transport: httpx.AsyncBaseTransport | None = None,
+        sleep: Callable[[float], Awaitable[None] | None] = asyncio.sleep,
     ) -> Self:
         """Build a client from explicit OpenRouter environment variables."""
 
@@ -91,6 +103,11 @@ class OpenRouterLLMClient:
             name="OPENROUTER_TIMEOUT_SECONDS",
             default=DEFAULT_TIMEOUT_SECONDS,
         )
+        total_deadline_seconds = _parse_float_setting(
+            values.get("OPENROUTER_TOTAL_DEADLINE_SECONDS"),
+            name="OPENROUTER_TOTAL_DEADLINE_SECONDS",
+            default=DEFAULT_TOTAL_DEADLINE_SECONDS,
+        )
         max_retries = _parse_int_setting(
             values.get("OPENROUTER_MAX_RETRIES"),
             name="OPENROUTER_MAX_RETRIES",
@@ -101,8 +118,9 @@ class OpenRouterLLMClient:
             model=model,
             base_url=base_url,
             timeout_seconds=timeout_seconds,
+            total_deadline_seconds=total_deadline_seconds,
             max_retries=max_retries,
-            http_client=http_client,
+            http_transport=http_transport,
             sleep=sleep,
         )
 
@@ -125,7 +143,7 @@ class OpenRouterLLMClient:
             user_prompt=user_prompt,
         )
         self.last_usage = None
-        response = self._post_with_retries(payload)
+        response = self._run_generation_request(payload)
         body = _response_json(response)
         self.last_usage = _parse_usage(body.get("usage"))
         content = _extract_content(body)
@@ -142,10 +160,7 @@ class OpenRouterLLMClient:
         return dict(parsed)
 
     def close(self) -> None:
-        """Close the internally owned HTTP client."""
-
-        if self._owns_http_client:
-            self._http_client.close()
+        """Retained for context-manager compatibility; requests self-close."""
 
     def __enter__(self) -> Self:
         return self
@@ -178,56 +193,83 @@ class OpenRouterLLMClient:
             "provider": {"require_parameters": True},
         }
 
-    def _post_with_retries(self, payload: dict[str, Any]) -> httpx.Response:
+    def _run_generation_request(self, payload: dict[str, Any]) -> httpx.Response:
+        """Run one cancellable generation from synchronous application code."""
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:  # The public adapter is intentionally synchronous.
+            raise LLMTransportError(
+                "OpenRouter synchronous client cannot run inside an event loop"
+            )
+        return asyncio.run(self._post_with_retries(payload))
+
+    async def _post_with_retries(self, payload: dict[str, Any]) -> httpx.Response:
+        """Bound all HTTP attempts and backoff by one generation deadline."""
+
+        try:
+            async with asyncio.timeout(self.total_deadline_seconds):
+                return await self._post_attempts(payload)
+        except TimeoutError as error:
+            raise LLMTotalDeadlineError(
+                "OpenRouter generation exceeded its total deadline"
+            ) from error
+
+    async def _post_attempts(self, payload: dict[str, Any]) -> httpx.Response:
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
         attempts = self.max_retries + 1
-        for attempt in range(attempts):
-            try:
-                response = self._http_client.post(
-                    self.endpoint_url,
-                    headers=headers,
-                    json=payload,
-                    timeout=self.timeout_seconds,
-                )
-            except httpx.TimeoutException as error:
-                if attempt < self.max_retries:
-                    self._backoff(attempt)
-                    continue
-                raise LLMTransportError(
-                    f"OpenRouter request timed out after {attempts} attempt(s)"
-                ) from error
-            except httpx.RequestError as error:
-                if attempt < self.max_retries:
-                    self._backoff(attempt)
-                    continue
-                raise LLMTransportError(
-                    f"OpenRouter transport failed after {attempts} attempt(s)"
-                ) from error
+        async with httpx.AsyncClient(transport=self._http_transport) as client:
+            for attempt in range(attempts):
+                try:
+                    response = await client.post(
+                        self.endpoint_url,
+                        headers=headers,
+                        json=payload,
+                        timeout=self.timeout_seconds,
+                    )
+                except httpx.TimeoutException as error:
+                    if attempt < self.max_retries:
+                        await self._backoff(attempt)
+                        continue
+                    raise LLMTransportError(
+                        f"OpenRouter request timed out after {attempts} attempt(s)"
+                    ) from error
+                except httpx.RequestError as error:
+                    if attempt < self.max_retries:
+                        await self._backoff(attempt)
+                        continue
+                    raise LLMTransportError(
+                        f"OpenRouter transport failed after {attempts} attempt(s)"
+                    ) from error
 
-            if 200 <= response.status_code < 300:
-                return response
-            if (
-                response.status_code in TRANSIENT_STATUS_CODES
-                and attempt < self.max_retries
-            ):
-                self._backoff(attempt)
-                continue
-            if response.status_code in TRANSIENT_STATUS_CODES:
+                if 200 <= response.status_code < 300:
+                    return response
+                if (
+                    response.status_code in TRANSIENT_STATUS_CODES
+                    and attempt < self.max_retries
+                ):
+                    await self._backoff(attempt)
+                    continue
+                if response.status_code in TRANSIENT_STATUS_CODES:
+                    raise LLMTransportError(
+                        "OpenRouter returned transient HTTP "
+                        f"{response.status_code} after {attempts} attempt(s)"
+                    )
                 raise LLMTransportError(
-                    "OpenRouter returned transient HTTP "
-                    f"{response.status_code} after {attempts} attempt(s)"
+                    f"OpenRouter request failed with HTTP {response.status_code}"
                 )
-            raise LLMTransportError(
-                f"OpenRouter request failed with HTTP {response.status_code}"
-            )
         raise AssertionError("retry loop exhausted without returning or raising")
 
-    def _backoff(self, attempt: int) -> None:
-        self._sleep(0.25 * (2**attempt))
+    async def _backoff(self, attempt: int) -> None:
+        result = self._sleep(0.25 * (2**attempt))
+        if inspect.isawaitable(result):
+            await result
 
 
 def _required_secret(value: str, name: str) -> str:
@@ -264,6 +306,24 @@ def _validate_timeout(value: float) -> float:
             "OPENROUTER_TIMEOUT_SECONDS must be finite and greater than zero"
         )
     return timeout
+
+
+def _validate_total_deadline(value: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise LLMConfigurationError(
+            "OPENROUTER_TOTAL_DEADLINE_SECONDS must be numeric"
+        )
+    deadline = float(value)
+    if not math.isfinite(deadline) or deadline <= 0:
+        raise LLMConfigurationError(
+            "OPENROUTER_TOTAL_DEADLINE_SECONDS must be finite and greater than zero"
+        )
+    if deadline > MAX_TOTAL_DEADLINE_SECONDS:
+        raise LLMConfigurationError(
+            "OPENROUTER_TOTAL_DEADLINE_SECONDS must not exceed "
+            f"{MAX_TOTAL_DEADLINE_SECONDS:g}"
+        )
+    return deadline
 
 
 def _validate_retries(value: int) -> int:
@@ -359,10 +419,12 @@ def _optional_nonnegative_float(value: Any) -> float | None:
 __all__ = [
     "DEFAULT_MAX_RETRIES",
     "DEFAULT_OPENROUTER_BASE_URL",
+    "DEFAULT_TOTAL_DEADLINE_SECONDS",
     "DEFAULT_TIMEOUT_SECONDS",
     "LLMConfigurationError",
     "LLMProviderError",
     "LLMResponseError",
+    "LLMTotalDeadlineError",
     "LLMTransportError",
     "LLMUsage",
     "OpenRouterLLMClient",

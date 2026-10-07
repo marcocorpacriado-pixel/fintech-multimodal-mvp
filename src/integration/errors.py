@@ -20,10 +20,12 @@ from src.extraction.openrouter_client import (
     LLMConfigurationError,
     LLMProviderError,
     LLMResponseError,
+    LLMTotalDeadlineError,
     LLMTransportError,
 )
 from src.extraction.pipeline import (
     GroundedAnalysisError,
+    ModelOutputRejectedError,
     PipelineAnalysisError,
     PipelineInputError,
     PipelineVerificationError,
@@ -74,6 +76,8 @@ class IntegrationDiagnostic(BaseModel):
     category: IntegrationErrorCode
     reason_code: str = Field(min_length=1)
     verification_issue_codes: list[str] = Field(default_factory=list)
+    generation_attempts: int | None = None
+    first_failure_category: str | None = None
 
 
 _FILING_NOT_FOUND_ERRORS = (
@@ -127,12 +131,15 @@ def map_integration_error(error: BaseException) -> IntegrationError:
         None,
     )
     if grounding is not None:
-        reason_code = _grounding_reason_code(str(grounding))
         return IntegrationError(
             code="GROUNDING_ERROR",
             message="Generated analysis failed evidence grounding.",
-            # Empty retrieval is deterministic; malformed model citations are not.
-            retryable=reason_code != "EMPTY_RETRIEVAL",
+            # Only a rejected model generation can differ on a new attempt;
+            # empty retrieval and pre-generation input problems are deterministic.
+            retryable=(
+                isinstance(grounding, ModelOutputRejectedError)
+                and grounding.reason_code != "EMPTY_RETRIEVAL"
+            ),
         )
     if _contains(chain, LLMConfigurationError):
         return IntegrationError(
@@ -194,6 +201,16 @@ def diagnose_integration_failure(error: BaseException) -> IntegrationDiagnostic:
 
     chain = _exception_chain(error)
     mapped = map_integration_error(error)
+    attempts = next(
+        (item.attempts for item in chain if getattr(item, "attempts", ())),
+        (),
+    )
+    trace = {
+        "generation_attempts": len(attempts) or None,
+        "first_failure_category": (
+            attempts[0].outcome if len(attempts) > 1 else None
+        ),
+    }
     verification = next(
         (
             item
@@ -208,6 +225,7 @@ def diagnose_integration_failure(error: BaseException) -> IntegrationDiagnostic:
             category=mapped.code,
             reason_code="DETERMINISTIC_VERIFICATION_REJECTED",
             verification_issue_codes=issue_codes,
+            **trace,
         )
 
     grounding = next(
@@ -217,7 +235,15 @@ def diagnose_integration_failure(error: BaseException) -> IntegrationDiagnostic:
     if grounding is not None:
         return IntegrationDiagnostic(
             category=mapped.code,
-            reason_code=_grounding_reason_code(str(grounding)),
+            reason_code=_grounding_reason_code(grounding),
+            **trace,
+        )
+
+    if _contains(chain, LLMTotalDeadlineError):
+        return IntegrationDiagnostic(
+            category=mapped.code,
+            reason_code=LLMTotalDeadlineError.reason_code,
+            **trace,
         )
 
     return IntegrationDiagnostic(
@@ -230,29 +256,15 @@ def diagnose_integration_failure(error: BaseException) -> IntegrationDiagnostic:
             "LLM_PROVIDER_ERROR": "LLM_PROVIDER_FAILED",
             "UNKNOWN_ERROR": "UNEXPECTED_FAILURE",
         }.get(mapped.code, "UNCLASSIFIED_FAILURE"),
+        **trace,
     )
 
 
-def _grounding_reason_code(message: str) -> str:
-    """Map our controlled grounding messages to stable, non-sensitive codes."""
+def _grounding_reason_code(error: GroundedAnalysisError) -> str:
+    """Stable, non-sensitive reason code for a grounding failure."""
 
-    normalized = message.casefold()
-    if "not a chunk excerpt" in normalized:
-        return "EVIDENCE_NOT_IN_SOURCE"
-    if "source_section" in normalized and "does not match" in normalized:
-        return "SECTION_MISMATCH"
-    if "unknown outlook source_id" in normalized:
-        return "INVALID_OUTLOOK_SOURCE_ID"
-    if "unknown evidence source_id" in normalized:
-        return "INVALID_SOURCE_ID"
-    if "known management outlook sentiment requires" in normalized:
-        return "OUTLOOK_WITHOUT_EVIDENCE"
-    if "without retrieved evidence" in normalized or (
-        "require retrieved evidence" in normalized
-    ):
-        return "EMPTY_RETRIEVAL"
-    if "invalid llm output schema" in normalized:
-        return "INVALID_OUTPUT_SCHEMA"
+    if isinstance(error, ModelOutputRejectedError):
+        return error.reason_code
     return "GROUNDING_REJECTED"
 
 

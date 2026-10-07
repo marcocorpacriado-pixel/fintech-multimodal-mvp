@@ -535,6 +535,8 @@ def render_technical_details(handoff: dict[str, Any]) -> None:
             "Report period": format_display_date(handoff.get("period")),
             "Retrieved evidence chunks": str(meta["retrieval_count"]),
             "Retrieved source IDs": str(len(meta["retrieved_source_ids"])),
+            "Generation attempts": str(meta.get("generation_attempts", 1)),
+            "Repair used": "yes" if meta.get("repair_used") else "no",
             "Verification": verification_label(handoff["verification"]),
         }
         st.dataframe(

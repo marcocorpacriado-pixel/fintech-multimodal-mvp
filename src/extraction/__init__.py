@@ -11,11 +11,20 @@ from .financial_analyzer import (
     build_financial_metrics,
     classify_duration,
 )
+from .evidence_catalog import (
+    EvidenceCatalog,
+    EvidenceCatalogError,
+    EvidenceItem,
+    build_evidence_catalog,
+)
 from .pipeline import (
     DEFAULT_FINANCIAL_QUERIES,
     FINANCIAL_ANALYST_SYSTEM_PROMPT,
+    GenerationAttempt,
     GroundedAnalysisError,
     LLMClient,
+    ModelOutputProblem,
+    ModelOutputRejectedError,
     PipelineAnalysisError,
     PipelineError,
     PipelineInputError,
@@ -26,9 +35,11 @@ from .pipeline import (
     run_analysis_pipeline,
 )
 from .openrouter_client import (
+    DEFAULT_TOTAL_DEADLINE_SECONDS,
     LLMConfigurationError,
     LLMProviderError,
     LLMResponseError,
+    LLMTotalDeadlineError,
     LLMTransportError,
     LLMUsage,
     OpenRouterLLMClient,
@@ -68,11 +79,19 @@ from .sec_ingestion import (
 )
 
 __all__ = [
+    "EvidenceCatalog",
+    "EvidenceCatalogError",
+    "EvidenceItem",
+    "GenerationAttempt",
+    "ModelOutputProblem",
+    "ModelOutputRejectedError",
+    "build_evidence_catalog",
     "AnalysisPipelineResult",
     "AnalysisVerificationError",
     "ComparisonType",
     "DocumentChunk",
     "DEFAULT_FINANCIAL_QUERIES",
+    "DEFAULT_TOTAL_DEADLINE_SECONDS",
     "DEFAULT_SEC_INGESTION_DIR",
     "Evidence",
     "FINANCIAL_ANALYST_SYSTEM_PROMPT",
@@ -84,6 +103,7 @@ __all__ = [
     "LLMConfigurationError",
     "LLMProviderError",
     "LLMResponseError",
+    "LLMTotalDeadlineError",
     "LLMTransportError",
     "LLMUsage",
     "LoadedDocument",

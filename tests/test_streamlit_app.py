@@ -12,8 +12,9 @@ from streamlit.testing.v1 import AppTest
 
 from src.api.main import _run_demo_analysis, app as api_app
 from src.extraction import (
-    GroundedAnalysisError,
     LLMTransportError,
+    ModelOutputProblem,
+    ModelOutputRejectedError,
     SECFilingMetadata,
     SECServiceError,
 )
@@ -113,6 +114,8 @@ def test_demo_analysis_renders_professional_dashboard():
     technical = dict(at.dataframe[-1].value.itertuples(index=False, name=None))
     assert technical["Analysis mode"] == "demo"
     assert technical["Provider"] == "fixture"
+    assert technical["Generation attempts"] == "1"
+    assert technical["Repair used"] == "no"
 
 
 def test_real_mode_uses_discovered_filing_and_separates_dates():
@@ -195,7 +198,15 @@ def test_grounding_error_is_blocked_and_explained_without_partial_result():
         patch("src.api.main.discover_sec_filings", return_value=[KNOWN_FILING]),
         patch(
             "src.api.main._run_real_analysis",
-            side_effect=GroundedAnalysisError("raw evidence and secret details"),
+            side_effect=ModelOutputRejectedError(
+                [
+                    ModelOutputProblem(
+                        "key_risks[0].evidence_id",
+                        "INVALID_EVIDENCE_ID",
+                        "raw evidence and secret details",
+                    )
+                ]
+            ),
         ),
     ):
         at = _run_real_sidebar(_app_test().run())

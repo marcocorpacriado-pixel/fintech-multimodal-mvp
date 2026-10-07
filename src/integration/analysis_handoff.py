@@ -101,6 +101,11 @@ class PipelineMetadataDTO(IntegrationSchema):
     effective_queries: list[str] = Field(default_factory=list)
     retrieval_count: int = Field(ge=0)
     retrieved_source_ids: list[str] = Field(default_factory=list)
+    generation_attempts: int = Field(default=1, ge=1, le=2)
+    repair_used: bool = False
+    first_failure_category: (
+        Literal["GROUNDING_ERROR", "VERIFICATION_ERROR"] | None
+    ) = None
 
     @model_validator(mode="after")
     def validate_retrieval_metadata(self) -> Self:
@@ -193,6 +198,9 @@ def build_analysis_handoff(
             effective_queries=list(result.queries),
             retrieval_count=result.retrieval_count,
             retrieved_source_ids=list(result.retrieved_source_ids),
+            generation_attempts=result.generation_attempts,
+            repair_used=result.repair_used,
+            first_failure_category=result.first_failure_category,
         ),
     )
 

@@ -161,6 +161,15 @@ def _run_real_analysis(
                 previous_xbrl_filing=inputs.previous_filing,
                 llm_client=llm,
             )
+            logger.info(
+                "real analysis completed request_id=%s accession=%s "
+                "generation_attempts=%d repair_used=%s first_failure=%s",
+                request_id,
+                inputs.current_accession,
+                result.generation_attempts,
+                result.repair_used,
+                result.first_failure_category or "none",
+            )
             return build_analysis_handoff(
                 result,
                 analysis_mode="real",
@@ -172,12 +181,15 @@ def _run_real_analysis(
         diagnostic = diagnose_integration_failure(error)
         logger.warning(
             "real analysis rejected request_id=%s accession=%s category=%s "
-            "reason=%s verification_issues=%s",
+            "reason=%s verification_issues=%s generation_attempts=%s "
+            "first_failure=%s",
             request_id,
             inputs.current_accession,
             diagnostic.category,
             diagnostic.reason_code,
             ",".join(diagnostic.verification_issue_codes) or "none",
+            diagnostic.generation_attempts or "n/a",
+            diagnostic.first_failure_category or "none",
         )
         raise
 

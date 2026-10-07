@@ -86,10 +86,28 @@ Reduced JSON shape:
     "filing_date": "2026-07-31",
     "effective_queries": ["revenue operating performance"],
     "retrieval_count": 1,
-    "retrieved_source_ids": ["sec-filing:chunk-id"]
+    "retrieved_source_ids": ["sec-filing:chunk-id"],
+    "generation_attempts": 1,
+    "repair_used": false,
+    "first_failure_category": null
   }
 }
 ```
+
+`generation_attempts` (1 or 2), `repair_used` and `first_failure_category`
+(`GROUNDING_ERROR` or `VERIFICATION_ERROR`, only when a repair ran) are safe
+observability metadata. They never contain model output, prompts or evidence.
+
+### Grounded generation contract (R12.2)
+
+The backend builds a deterministic evidence catalog (`E01`, `E02`, ...) from the
+retrieved chunks. Each entry is a literal, offset-traceable slice of a chunk.
+The model returns only `{finding, evidence_id}` per positive/risk and
+`evidence_ids` for the outlook. `source_id`, `source_section` and the quoted
+`evidence` above are rebuilt from the catalog, never copied from model output.
+After a grounding or verifier rejection of a *generated* output, exactly one
+repair generation is allowed (never for SEC, input, provider or empty-retrieval
+failures). A failed repair blocks the analysis; no rule is relaxed.
 
 Marco may build metric cards and charts directly from `financial_metrics`.
 `change_pct`, period comparability, units, and `comparison_type` are canonical
@@ -163,8 +181,8 @@ Stable categories are:
 | `SEC_INGESTION_ERROR` | SEC service/configuration/data preparation | transient service failures only (HTTP 503) |
 | `ANALYSIS_ERROR` | XBRL normalization/metric or analysis failure | no |
 | `LLM_PROVIDER_ERROR` | provider transport/response | yes, except configuration |
-| `GROUNDING_ERROR` | invalid citation/evidence | no |
-| `VERIFICATION_ERROR` | deterministic verifier rejection | no |
+| `GROUNDING_ERROR` | invalid evidence selection after the bounded repair | yes, explicit user retry (not for empty retrieval) |
+| `VERIFICATION_ERROR` | deterministic verifier rejection after the bounded repair | yes, explicit user retry |
 | `UNKNOWN_ERROR` | unclassified failure | no |
 
 Messages are fixed by category. They never reflect provider response bodies,

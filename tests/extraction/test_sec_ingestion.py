@@ -182,7 +182,7 @@ class FakeLLMClient:
             "management_outlook": {
                 "summary": "Insufficient separately cited outlook evidence.",
                 "sentiment": "unknown",
-                "source_ids": [],
+                "evidence_ids": [],
             },
             "executive_summary": SUMMARY,
         }

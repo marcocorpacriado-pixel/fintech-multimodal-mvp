@@ -8,8 +8,9 @@ from fastapi.testclient import TestClient
 import src.api.main as api_main
 from src.api.main import app
 from src.extraction import (
-    GroundedAnalysisError,
     LLMTransportError,
+    ModelOutputProblem,
+    ModelOutputRejectedError,
     PipelineInputError,
     SECFilingMetadata,
     SECFilingNotFoundError,
@@ -79,8 +80,11 @@ def test_analysis_error_handling(error, status, code):
 def test_analysis_logs_safe_request_diagnostic_without_raw_grounding_text(
     caplog,
 ):
-    raw = "evidence for 'chunk:private-secret' is not a chunk excerpt"
-    with patch("src.api.main._run_real_analysis", side_effect=GroundedAnalysisError(raw)):
+    raw = "unknown evidence_id: 'chunk:private-secret'"
+    rejection = ModelOutputRejectedError(
+        [ModelOutputProblem("key_risks[0].evidence_id", "INVALID_EVIDENCE_ID", raw)]
+    )
+    with patch("src.api.main._run_real_analysis", side_effect=rejection):
         response = client.post(
             "/api/v1/analysis",
             json={
@@ -93,7 +97,7 @@ def test_analysis_logs_safe_request_diagnostic_without_raw_grounding_text(
     assert response.status_code == 422
     assert "request_id=" in caplog.text
     assert "category=GROUNDING_ERROR" in caplog.text
-    assert "reason=EVIDENCE_NOT_IN_SOURCE" in caplog.text
+    assert "reason=INVALID_EVIDENCE_ID" in caplog.text
     assert "private-secret" not in caplog.text
 
 
@@ -225,6 +229,7 @@ def test_real_handoff_separates_filing_date_from_report_period():
         filing_date=date(2026, 7, 31),
         report_period="2026-06-27",
         filing_type="10-Q",
+        current_accession="0000320193-26-000020",
         current_filing=object(),
         previous_filing=object(),
     )

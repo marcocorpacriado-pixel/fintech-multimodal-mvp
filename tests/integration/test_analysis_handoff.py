@@ -7,9 +7,16 @@ from datetime import date
 
 import pytest
 
-from src.extraction.openrouter_client import LLMResponseError, LLMTransportError
+from src.extraction.openrouter_client import (
+    LLMResponseError,
+    LLMTotalDeadlineError,
+    LLMTransportError,
+)
 from src.extraction.pipeline import (
+    GenerationAttempt,
     GroundedAnalysisError,
+    ModelOutputProblem,
+    ModelOutputRejectedError,
     PipelineAnalysisError,
     PipelineInputError,
     PipelineVerificationError,
@@ -246,6 +253,53 @@ def test_pipeline_retrieval_metadata_is_preserved(
     )
 
 
+def test_default_generation_metadata_reports_single_attempt(
+    handoff: AnalysisHandoff,
+) -> None:
+    meta = handoff.pipeline_metadata
+    assert (meta.generation_attempts, meta.repair_used) == (1, False)
+    assert meta.first_failure_category is None
+
+
+def test_repair_metadata_is_carried_to_the_handoff(
+    pipeline_result: AnalysisPipelineResult,
+) -> None:
+    repaired = pipeline_result.model_copy(
+        update={
+            "generation_attempts": 2,
+            "repair_used": True,
+            "first_failure_category": "GROUNDING_ERROR",
+        }
+    )
+
+    meta = build_analysis_handoff(repaired, analysis_mode="real").pipeline_metadata
+
+    assert (meta.generation_attempts, meta.repair_used) == (2, True)
+    assert meta.first_failure_category == "GROUNDING_ERROR"
+    assert "raw" not in meta.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"generation_attempts": 2, "repair_used": False},
+        {"generation_attempts": 1, "repair_used": True},
+        {"generation_attempts": 2, "repair_used": True},  # missing first failure
+        {"generation_attempts": 3, "repair_used": True,
+         "first_failure_category": "GROUNDING_ERROR"},
+    ],
+)
+def test_inconsistent_repair_metadata_is_rejected(
+    pipeline_result: AnalysisPipelineResult,
+    fields: dict[str, object],
+) -> None:
+    payload = pipeline_result.model_dump()
+    payload.update(fields)
+
+    with pytest.raises(ValueError):
+        AnalysisPipelineResult.model_validate(payload)
+
+
 def test_handoff_round_trips_through_json(handoff: AnalysisHandoff) -> None:
     restored = AnalysisHandoff.model_validate_json(handoff.model_dump_json())
     assert restored == handoff
@@ -333,6 +387,10 @@ def test_tts_metadata_is_minimal_and_correct(
     }
 
 
+def _rejection(code: str, message: str = "rejected") -> ModelOutputRejectedError:
+    return ModelOutputRejectedError([ModelOutputProblem("output", code, message)])
+
+
 @pytest.mark.parametrize(
     ("error", "code", "retryable"),
     [
@@ -341,7 +399,8 @@ def test_tts_metadata_is_minimal_and_correct(
         (SECFilingNotFoundError("missing"), "FILING_NOT_FOUND", False),
         (SECServiceError("network"), "SEC_INGESTION_ERROR", True),
         (SECIngestionError("network"), "SEC_INGESTION_ERROR", True),
-        (GroundedAnalysisError("citation"), "GROUNDING_ERROR", True),
+        (_rejection("INVALID_EVIDENCE_ID"), "GROUNDING_ERROR", True),
+        (GroundedAnalysisError("pre-generation input"), "GROUNDING_ERROR", False),
         (LLMTransportError("timeout"), "LLM_PROVIDER_ERROR", True),
         (PipelineAnalysisError("analysis"), "ANALYSIS_ERROR", False),
         (ValueError("unexpected"), "UNKNOWN_ERROR", False),
@@ -367,6 +426,21 @@ def test_wrapped_provider_error_is_detected() -> None:
     assert mapped.retryable is True
 
 
+def test_total_deadline_maps_to_safe_retryable_provider_error() -> None:
+    secret = "sk-or-secret-provider-body"
+    error = LLMTotalDeadlineError(secret)
+
+    mapped = map_integration_error(error)
+    diagnostic = diagnose_integration_failure(error)
+
+    assert mapped.code == "LLM_PROVIDER_ERROR"
+    assert mapped.retryable is True
+    assert secret not in mapped.model_dump_json()
+    assert diagnostic.category == "LLM_PROVIDER_ERROR"
+    assert diagnostic.reason_code == "TOTAL_DEADLINE_EXCEEDED"
+    assert secret not in diagnostic.model_dump_json()
+
+
 def test_verification_error_mapping() -> None:
     report = VerificationReport(
         valid=False,
@@ -384,15 +458,8 @@ def test_verification_error_mapping() -> None:
     assert mapped.retryable is True
 
 
-@pytest.mark.parametrize(
-    "message",
-    [
-        "findings require retrieved evidence",
-        "management outlook must be unknown without retrieved evidence",
-    ],
-)
-def test_empty_retrieval_grounding_failure_is_not_retryable(message: str) -> None:
-    mapped = map_integration_error(GroundedAnalysisError(message))
+def test_empty_retrieval_grounding_failure_is_not_retryable() -> None:
+    mapped = map_integration_error(_rejection("EMPTY_RETRIEVAL"))
 
     assert mapped.code == "GROUNDING_ERROR"
     assert mapped.retryable is False
@@ -422,32 +489,47 @@ def test_internal_diagnostic_exposes_verifier_codes_without_issue_text() -> None
 
 
 @pytest.mark.parametrize(
-    ("message", "expected"),
+    "code",
     [
-        ("evidence for 'chunk:secret' is not a chunk excerpt", "EVIDENCE_NOT_IN_SOURCE"),
-        ("source_section 'x' does not match source chunk", "SECTION_MISMATCH"),
-        ("unknown evidence source_id: 'x'", "INVALID_SOURCE_ID"),
-        ("unknown outlook source_id: 'x'", "INVALID_OUTLOOK_SOURCE_ID"),
-        (
-            "a known management outlook sentiment requires evidence source_ids",
-            "OUTLOOK_WITHOUT_EVIDENCE",
-        ),
-        ("findings require retrieved evidence", "EMPTY_RETRIEVAL"),
-        (
-            "management outlook must be unknown without retrieved evidence",
-            "EMPTY_RETRIEVAL",
-        ),
-        ("invalid LLM output schema: private", "INVALID_OUTPUT_SCHEMA"),
+        "INVALID_EVIDENCE_ID",
+        "INVALID_OUTLOOK_EVIDENCE_ID",
+        "OUTLOOK_WITHOUT_EVIDENCE",
+        "EMPTY_RETRIEVAL",
+        "INVALID_OUTPUT_SCHEMA",
     ],
 )
 def test_internal_grounding_diagnostic_uses_stable_safe_reason_codes(
-    message: str,
-    expected: str,
+    code: str,
 ) -> None:
-    diagnostic = diagnose_integration_failure(GroundedAnalysisError(message))
+    diagnostic = diagnose_integration_failure(
+        _rejection(code, "private secret model text")
+    )
 
     assert diagnostic.category == "GROUNDING_ERROR"
-    assert diagnostic.reason_code == expected
+    assert diagnostic.reason_code == code
+    assert "secret" not in diagnostic.model_dump_json()
+
+
+def test_untyped_grounding_failure_has_generic_diagnostic() -> None:
+    diagnostic = diagnose_integration_failure(GroundedAnalysisError("secret"))
+
+    assert diagnostic.reason_code == "GROUNDING_REJECTED"
+    assert "secret" not in diagnostic.model_dump_json()
+
+
+def test_diagnostic_reports_repair_trace_without_content() -> None:
+    error = PipelineAnalysisError("boom")
+    error.attempts = (
+        GenerationAttempt(1, "VERIFICATION_ERROR", ("UNSUPPORTED_NUMBER",)),
+        GenerationAttempt(2, "GROUNDING_ERROR", ("INVALID_EVIDENCE_ID",)),
+    )
+    error.__cause__ = _rejection("INVALID_EVIDENCE_ID", "private secret")
+
+    diagnostic = diagnose_integration_failure(error)
+
+    assert diagnostic.generation_attempts == 2
+    assert diagnostic.first_failure_category == "VERIFICATION_ERROR"
+    assert diagnostic.reason_code == "INVALID_EVIDENCE_ID"
     assert "secret" not in diagnostic.model_dump_json()
 
 
