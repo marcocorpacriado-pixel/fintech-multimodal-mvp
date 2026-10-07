@@ -120,6 +120,20 @@ def test_demo_analysis_renders_professional_dashboard():
     assert technical["Repair used"] == "no"
 
 
+def test_first_visit_autoloads_demo_once():
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+        patch("src.api.main._run_demo_analysis", wraps=_run_demo_analysis) as demo,
+    ):
+        at = _app_test().run()
+        at.run()
+
+    assert not at.exception
+    assert "Demo Corp" in _all_text(at)
+    assert demo.call_count == 1
+
+
 def test_real_mode_uses_discovered_filing_and_separates_dates():
     handoff = _real_handoff()
     with (

@@ -645,6 +645,12 @@ def main() -> None:
     render_product_header()
     payload, run = render_sidebar()
 
+    # First visit: run the demo once so the dashboard is never empty. The flag
+    # stops retries if the API is down or the user later clears the report.
+    if "handoff" not in st.session_state and not st.session_state.get("demo_autoloaded"):
+        st.session_state.demo_autoloaded = True
+        payload, run = {"ticker": "DEMO", "mode": "demo"}, True
+
     previous_error = st.session_state.get("analysis_error")
     retry = render_error(previous_error) if previous_error and not run else False
     if run or retry:
