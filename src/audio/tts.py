@@ -60,6 +60,13 @@ DEFAULT_VOICE_BY_LANG: dict[str, str] = {
     "hi": "hf_alpha",
 }
 
+# Convención Kokoro: primera letra de la voz = idioma
+# (a=en-us, b=en-gb, e=es, f=fr, i=it, p=pt, j=ja, z=zh, h=hi).
+_VOICE_PREFIX_BY_LANG: dict[str, str] = {
+    "en-us": "a", "en-gb": "b", "es": "e", "fr-fr": "f",
+    "it": "i", "pt-br": "p", "ja": "j", "zh": "z", "hi": "h",
+}
+
 MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
 VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
@@ -153,6 +160,8 @@ def synthesize(
         raise ValueError("El texto no puede estar vacío.")
 
     lang_code = LANG_MAP.get(language.lower())
+    if lang_code is None and language.lower() in LANG_MAP.values():
+        lang_code = language.lower()  # ya es un código Kokoro ('fr-fr', 'pt-br')
     if lang_code is None:
         raise ValueError(
             f"Idioma no soportado: {language}. Soportados: {sorted(set(LANG_MAP.values()))}"
@@ -189,16 +198,24 @@ def list_voices(language: str | None = None) -> list[str]:
     voices = list(kokoro.get_voices())
     if language is None:
         return voices
-    # Convención Kokoro: primera letra = idioma (a=en-us, b=en-gb, e=es, f=fr, i=it, p=pt, j=ja, z=zh, h=hi)
-    prefix_map = {
-        "en-us": "a", "en-gb": "b", "es": "e", "fr-fr": "f",
-        "it": "i", "pt-br": "p", "ja": "j", "zh": "z", "hi": "h",
-    }
     lang_code = LANG_MAP.get(language.lower(), language)
-    prefix = prefix_map.get(lang_code)
+    prefix = _VOICE_PREFIX_BY_LANG.get(lang_code)
     if not prefix:
         return voices
     return [v for v in voices if v.startswith(prefix)]
+
+
+def language_for_voice(voice: str | None, default: str = "en-us") -> str:
+    """Idioma Kokoro que corresponde a una voz según su prefijo (ef_dora → es).
+
+    Sin esto, una voz española sintetizada con lang='en' se pronuncia en inglés.
+    """
+    if not voice:
+        return default
+    for lang_code, prefix in _VOICE_PREFIX_BY_LANG.items():
+        if voice.startswith(prefix):
+            return lang_code
+    return default
 
 
 # ---- Helpers internos -------------------------------------------------------

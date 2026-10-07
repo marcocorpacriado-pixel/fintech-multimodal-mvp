@@ -34,6 +34,7 @@ from .pipeline import (
     qualitative_analysis_json_schema,
     run_analysis_pipeline,
 )
+from .openrouter_chat import ChatStream, OpenRouterChatClient
 from .openrouter_client import (
     DEFAULT_TOTAL_DEADLINE_SECONDS,
     LLMConfigurationError,
@@ -79,6 +80,7 @@ from .sec_ingestion import (
 )
 
 __all__ = [
+    "ChatStream",
     "EvidenceCatalog",
     "EvidenceCatalogError",
     "EvidenceItem",
@@ -111,6 +113,7 @@ __all__ = [
     "ManagementOutlook",
     "METRIC_REGISTRY",
     "NormalizedXBRLFact",
+    "OpenRouterChatClient",
     "OpenRouterLLMClient",
     "PipelineAnalysisError",
     "PipelineError",

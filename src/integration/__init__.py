@@ -13,6 +13,13 @@ from .analysis_handoff import (
     build_analysis_handoff,
     build_tts_input,
 )
+from .chat_context import (
+    CHAT_SYSTEM_PROMPT,
+    ChatMessage,
+    ChatRequest,
+    build_chat_context,
+    citation_index,
+)
 from .errors import (
     IntegrationDiagnostic,
     IntegrationError,
@@ -26,6 +33,9 @@ __all__ = [
     "AnalysisHandoff",
     "AnalysisMetricDTO",
     "AnalysisMode",
+    "CHAT_SYSTEM_PROMPT",
+    "ChatMessage",
+    "ChatRequest",
     "IntegrationDiagnostic",
     "IntegrationError",
     "IntegrationErrorCode",
@@ -35,7 +45,9 @@ __all__ = [
     "VerificationDTO",
     "VerificationIssueDTO",
     "build_analysis_handoff",
+    "build_chat_context",
     "build_tts_input",
+    "citation_index",
     "diagnose_integration_failure",
     "map_integration_error",
 ]
