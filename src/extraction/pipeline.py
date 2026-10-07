@@ -51,6 +51,7 @@ from .schemas import (
     Sentiment,
     VerificationReport,
 )
+from .sentiment import classify_financial_sentiment, extract_sentiment_rationale
 
 
 logger = logging.getLogger(__name__)
@@ -349,11 +350,15 @@ def analyze_financials(
         for finding in qualitative.key_positive_developments
     ]
     risks = [_to_evidence(finding, catalog) for finding in qualitative.key_risks]
-    outlook = ManagementOutlook(
-        summary=qualitative.management_outlook.summary,
-        sentiment=qualitative.management_outlook.sentiment,
-        source_ids=catalog.source_ids_for(
-            qualitative.management_outlook.evidence_ids
+    outlook_evidence_ids = qualitative.management_outlook.evidence_ids
+    outlook = _classify_outlook(
+        ManagementOutlook(
+            summary=qualitative.management_outlook.summary,
+            sentiment=qualitative.management_outlook.sentiment,
+            source_ids=catalog.source_ids_for(outlook_evidence_ids),
+        ),
+        evidence_text=" ".join(
+            catalog.get(evidence_id).excerpt for evidence_id in outlook_evidence_ids
         ),
     )
     result = FinancialAnalysisResult(
@@ -909,6 +914,27 @@ def _validate_grounding(
             )
     if problems:
         raise ModelOutputRejectedError(problems)
+
+
+def _classify_outlook(
+    outlook: ManagementOutlook,
+    *,
+    evidence_text: str = "",
+) -> ManagementOutlook:
+    """Let FinBERT score grounded outlook sentiment; keep the LLM label on failure.
+
+    The rationale is the cited filing sentence FinBERT finds most aligned with
+    that label, so it is verbatim filing text tied to ``source_ids``. An
+    ``unknown`` outlook has no cited evidence, so it is never reclassified.
+    """
+
+    if outlook.sentiment == "unknown" or not outlook.source_ids:
+        return outlook
+    scored = classify_financial_sentiment(outlook.summary)
+    if scored is None:
+        return outlook
+    rationale = extract_sentiment_rationale(evidence_text, scored["sentiment"])
+    return outlook.model_copy(update={**scored, **(rationale or {})})
 
 
 def _to_evidence(finding: _GroundedFinding, catalog: EvidenceCatalog) -> Evidence:

@@ -76,14 +76,14 @@ def make_fact(
     )
 
 
-def previous_quarter(concept: str, value: float, **overrides: object) -> NormalizedXBRLFact:
+def year_ago_quarter(concept: str, value: float, **overrides: object) -> NormalizedXBRLFact:
     payload: dict[str, object] = {
         "accession": PREVIOUS_ACCESSION,
-        "filing_date": date(2026, 5, 1),
-        "period_start": date(2025, 12, 28),
-        "period_end": date(2026, 3, 28),
-        "fiscal_year": 2026,
-        "fiscal_period": "Q2",
+        "filing_date": date(2025, 8, 1),
+        "period_start": date(2025, 3, 30),
+        "period_end": date(2025, 6, 28),
+        "fiscal_year": 2025,
+        "fiscal_period": "Q3",
     }
     payload.update(overrides)
     return make_fact(concept, value, **payload)
@@ -94,14 +94,15 @@ def instant_fact(concept: str, value: float, *, current: bool = True, **override
         "period_type": "instant",
         "period_start": None,
         "period_end": None,
-        "period_instant": date(2026, 6, 27) if current else date(2026, 3, 28),
+        "period_instant": date(2026, 6, 27) if current else date(2025, 6, 28),
         "fiscal_period": None,
         "statement_type": "BalanceSheet",
     }
     if not current:
         payload.update(
             accession=PREVIOUS_ACCESSION,
-            filing_date=date(2026, 5, 1),
+            filing_date=date(2025, 8, 1),
+            fiscal_year=2025,
         )
     payload.update(overrides)
     return make_fact(concept, value, **payload)
@@ -115,14 +116,14 @@ def test_revenue_uses_quarter_only_context() -> None:
     metric = metric_named(
         build_financial_metrics(
             [make_fact(REVENUE, 120.0)],
-            [previous_quarter(REVENUE, 100.0)],
+            [year_ago_quarter(REVENUE, 100.0)],
         ),
         "Revenue",
     )
 
     assert metric.current_value == 120.0
     assert metric.previous_value == 100.0
-    assert metric.comparison_type == "QoQ"
+    assert metric.comparison_type == "YoY"
     assert metric.change_pct == pytest.approx(20.0)
 
 
@@ -130,27 +131,27 @@ def test_net_income_uses_quarter_only_context() -> None:
     metric = metric_named(
         build_financial_metrics(
             [make_fact(NET_INCOME, 30.0)],
-            [previous_quarter(NET_INCOME, 25.0)],
+            [year_ago_quarter(NET_INCOME, 25.0)],
         ),
         "Net Income",
     )
 
     assert metric.current_value == 30.0
-    assert metric.comparison_type == "QoQ"
+    assert metric.comparison_type == "YoY"
 
 
 def test_eps_uses_direct_quarter_only_context() -> None:
     metric = metric_named(
         build_financial_metrics(
             [make_fact(EPS, 2.02, unit="usdPerShare")],
-            [previous_quarter(EPS, 2.01, unit="usdPerShare")],
+            [year_ago_quarter(EPS, 2.01, unit="usdPerShare")],
         ),
         "Diluted EPS",
     )
 
     assert metric.current_value == 2.02
     assert metric.previous_value == 2.01
-    assert metric.comparison_type == "QoQ"
+    assert metric.comparison_type == "YoY"
 
 
 def test_eps_is_never_derived_from_ytd() -> None:
@@ -179,7 +180,7 @@ def test_eps_is_never_derived_from_ytd() -> None:
     assert metric.change_pct is None
 
 
-def test_cash_compares_consecutive_instants() -> None:
+def test_cash_compares_year_ago_instants() -> None:
     metric = metric_named(
         build_financial_metrics(
             [instant_fact(CASH, 90.0)],
@@ -190,8 +191,33 @@ def test_cash_compares_consecutive_instants() -> None:
 
     assert metric.current_value == 90.0
     assert metric.previous_value == 100.0
-    assert metric.comparison_type == "QoQ"
+    assert metric.comparison_type == "YoY"
     assert metric.change_pct == pytest.approx(-10.0)
+
+
+def test_sequential_quarter_is_never_compared() -> None:
+    sequential = year_ago_quarter(
+        REVENUE,
+        100.0,
+        filing_date=date(2026, 5, 1),
+        period_start=date(2025, 12, 28),
+        period_end=date(2026, 3, 28),
+        fiscal_year=2026,
+        fiscal_period="Q2",
+    )
+    sequential_cash = instant_fact(
+        CASH, 100.0, current=False, period_instant=date(2026, 3, 28)
+    )
+
+    metrics = build_financial_metrics(
+        [make_fact(REVENUE, 120.0), instant_fact(CASH, 90.0)],
+        [sequential, sequential_cash],
+    )
+
+    for name in ("Revenue", "Cash and Cash Equivalents"):
+        metric = metric_named(metrics, name)
+        assert metric.comparison_type is None
+        assert metric.change_pct is None
 
 
 def test_instant_metric_does_not_use_historical_value_from_current_filing() -> None:
@@ -352,7 +378,7 @@ def test_previous_zero_has_no_percentage_change() -> None:
     metric = metric_named(
         build_financial_metrics(
             [make_fact(REVENUE, 10.0)],
-            [previous_quarter(REVENUE, 0.0)],
+            [year_ago_quarter(REVENUE, 0.0)],
         ),
         "Revenue",
     )
@@ -363,7 +389,7 @@ def test_previous_zero_has_no_percentage_change() -> None:
 
 def test_missing_current_preserves_available_previous_value() -> None:
     metric = metric_named(
-        build_financial_metrics([], [previous_quarter(REVENUE, 100.0)]),
+        build_financial_metrics([], [year_ago_quarter(REVENUE, 100.0)]),
         "Revenue",
     )
 
@@ -456,7 +482,7 @@ def test_different_tickers_are_rejected() -> None:
     with pytest.raises(FinancialMetricSelectionError, match="one ticker"):
         build_financial_metrics(
             [make_fact(REVENUE, 100.0, ticker="AAPL")],
-            [previous_quarter(REVENUE, 90.0, ticker="MSFT")],
+            [year_ago_quarter(REVENUE, 90.0, ticker="MSFT")],
         )
 
 
@@ -464,7 +490,7 @@ def test_positive_percentage_change() -> None:
     metric = metric_named(
         build_financial_metrics(
             [make_fact(REVENUE, 150.0)],
-            [previous_quarter(REVENUE, 100.0)],
+            [year_ago_quarter(REVENUE, 100.0)],
         ),
         "Revenue",
     )
@@ -476,7 +502,7 @@ def test_negative_percentage_change() -> None:
     metric = metric_named(
         build_financial_metrics(
             [make_fact(REVENUE, 75.0)],
-            [previous_quarter(REVENUE, 100.0)],
+            [year_ago_quarter(REVENUE, 100.0)],
         ),
         "Revenue",
     )
@@ -488,7 +514,7 @@ def test_negative_values_keep_financial_sign() -> None:
     metric = metric_named(
         build_financial_metrics(
             [make_fact(NET_INCOME, -50.0)],
-            [previous_quarter(NET_INCOME, -100.0)],
+            [year_ago_quarter(NET_INCOME, -100.0)],
         ),
         "Net Income",
     )
@@ -512,14 +538,14 @@ def test_financial_metric_serialization_includes_traceability() -> None:
     metric = metric_named(
         build_financial_metrics(
             [make_fact(REVENUE, 120.0)],
-            [previous_quarter(REVENUE, 100.0)],
+            [year_ago_quarter(REVENUE, 100.0)],
         ),
         "Revenue",
     )
 
     dumped = json.loads(metric.model_dump_json())
 
-    assert dumped["comparison_type"] == "QoQ"
+    assert dumped["comparison_type"] == "YoY"
     assert dumped["current_period"] == "2026-03-29/2026-06-27"
     assert len(dumped["source_ids"]) == 2
 

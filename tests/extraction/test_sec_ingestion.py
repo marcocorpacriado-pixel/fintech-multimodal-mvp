@@ -208,7 +208,7 @@ def source_row(
         "period_start": period_start,
         "period_end": period_end,
         "period_instant": np.nan,
-        "fiscal_year": 2026,
+        "fiscal_year": int(period_end[:4]),
         "fiscal_period": fiscal_period,
         "label": "Revenue",
         "statement_type": "IncomeStatement",
@@ -264,14 +264,14 @@ def previous_filing(**overrides: object) -> FakeFiling:
     payload: dict[str, object] = {
         "accession_no": PREVIOUS_ACCESSION,
         "form": "10-Q",
-        "filing_date": date(2026, 5, 1),
-        "report_date": date(2026, 3, 28),
+        "filing_date": date(2025, 8, 1),
+        "report_date": date(2025, 6, 28),
         "xbrl_value": xbrl_for(
             value=100.0,
             fact_id="revenue-previous",
-            period_start="2025-12-28",
-            period_end="2026-03-28",
-            fiscal_period="Q2",
+            period_start="2025-03-30",
+            period_end="2025-06-28",
+            fiscal_period="Q3",
         ),
     }
     payload.update(overrides)
@@ -361,7 +361,7 @@ def test_discovery_returns_latest_distinct_report_periods_without_loading_data()
     amendment = previous_filing(
         accession_no="0000320193-26-000014",
         form="10-Q/A",
-        filing_date=date(2026, 5, 5),
+        filing_date=date(2025, 8, 5),
     )
     company = company_with(original, amendment)
     factory = FakeCompanyFactory(company)
@@ -423,6 +423,33 @@ def test_current_filing_object_is_preserved(tmp_path: Path) -> None:
     assert result.current_filing is current
 
 
+def test_sequential_quarter_is_skipped_for_same_quarter_last_year(
+    tmp_path: Path,
+) -> None:
+    sequential = previous_filing(
+        accession_no="0000320193-26-000013",
+        filing_date=date(2026, 5, 1),
+        report_date=date(2026, 3, 28),
+    )
+
+    result, _, _ = prepare(tmp_path, company=company_with(sequential))
+
+    assert result.previous_accession == PREVIOUS_ACCESSION
+
+
+def test_missing_year_ago_filing_is_rejected_even_with_sequential_quarter(
+    tmp_path: Path,
+) -> None:
+    sequential = previous_filing(
+        filing_date=date(2026, 5, 1),
+        report_date=date(2026, 3, 28),
+    )
+    company = FakeCompany([current_filing(), sequential])
+
+    with pytest.raises(SECPreviousFilingNotFoundError, match="one year before"):
+        prepare(tmp_path, company=company)
+
+
 def test_previous_fiscal_ten_q_is_selected(tmp_path: Path) -> None:
     previous = previous_filing()
     company = company_with(previous=previous)
@@ -452,12 +479,12 @@ def test_latest_amendment_wins_for_previous_fiscal_period(tmp_path: Path) -> Non
     older_amendment = previous_filing(
         accession_no="0000320193-26-000014",
         form="10-Q/A",
-        filing_date=date(2026, 5, 5),
+        filing_date=date(2025, 8, 5),
     )
     latest_amendment = previous_filing(
         accession_no="0000320193-26-000015",
         form="10-Q/A",
-        filing_date=date(2026, 5, 6),
+        filing_date=date(2025, 8, 6),
     )
     company = company_with(
         older_amendment,

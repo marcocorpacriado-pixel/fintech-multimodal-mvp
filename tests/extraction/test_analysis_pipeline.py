@@ -156,7 +156,7 @@ def source_row(
         "period_start": period_start,
         "period_end": period_end,
         "period_instant": np.nan,
-        "fiscal_year": 2026,
+        "fiscal_year": int(period_end[:4]),
         "fiscal_period": fiscal_period,
         "label": "Revenue",
         "statement_type": "IncomeStatement",
@@ -185,13 +185,13 @@ def xbrl_filings() -> tuple[FakeFiling, FakeFiling]:
                 source_row(
                     value=100.0,
                     fact_id="revenue-previous",
-                    period_start="2025-12-28",
-                    period_end="2026-03-28",
-                    fiscal_period="Q2",
+                    period_start="2025-03-30",
+                    period_end="2025-06-28",
+                    fiscal_period="Q3",
                 )
             ]
         ),
-        filing_date=date(2026, 5, 1),
+        filing_date=date(2025, 8, 1),
         accession_number="0000320193-26-000013",
     )
     return current, previous
@@ -301,7 +301,7 @@ def test_pipeline_builds_financial_metrics(tmp_path: Path) -> None:
     assert metrics["Revenue"].current_value == 120.0
     assert metrics["Revenue"].previous_value == 100.0
     assert metrics["Revenue"].change_pct == pytest.approx(20.0)
-    assert metrics["Revenue"].comparison_type == "QoQ"
+    assert metrics["Revenue"].comparison_type == "YoY"
 
 
 def test_fake_llm_receives_canonical_metrics_and_evidence(tmp_path: Path) -> None:

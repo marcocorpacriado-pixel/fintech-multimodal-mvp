@@ -150,9 +150,12 @@ def prepare_sec_analysis_inputs(
     injected providers are intended for deterministic offline testing.
 
     Previous filing policy:
-        Select the closest earlier ``report_date`` among filings of the same
-        base form. For duplicate filings covering that fiscal period, prefer an
-        amendment, then the latest filing date, then accession number.
+        Select the same fiscal period one year earlier (YoY): among filings of
+        the same base form, the ``report_date`` 340-380 days before the target
+        closest to 365 days. Sequential quarters are never used, so seasonality
+        does not bias comparisons. For duplicate filings covering that fiscal
+        period, prefer an amendment, then the latest filing date, then
+        accession number.
     """
 
     normalized_ticker = normalize_sec_ticker(ticker)
@@ -443,25 +446,36 @@ def _validate_current_filing(
         )
 
 
+# 52/53-week fiscal years shift period ends by up to a week; same window as XBRL YoY.
+_YOY_MIN_DAYS = 340
+_YOY_MAX_DAYS = 380
+
+
 def _select_previous_filing(
     current: SECFilingLike,
     filings: Iterable[SECFilingLike],
 ) -> SECFilingLike:
     current_report_date = _report_date(current)
     base_form = _base_form(_filing_form(current))
+
+    def year_gap(filing: SECFilingLike) -> int:
+        return (current_report_date - _report_date(filing)).days
+
     eligible = [
         filing
         for filing in filings
         if _base_form(_filing_form(filing)) == base_form
-        and _report_date(filing) < current_report_date
+        and _YOY_MIN_DAYS <= year_gap(filing) <= _YOY_MAX_DAYS
     ]
     if not eligible:
         raise SECPreviousFilingNotFoundError(
-            f"no previous {base_form} filing exists before report date "
-            f"{current_report_date}"
+            f"no previous {base_form} filing exists for the same period one "
+            f"year before report date {current_report_date}"
         )
 
-    previous_report_date = max(_report_date(filing) for filing in eligible)
+    previous_report_date = _report_date(
+        min(eligible, key=lambda filing: abs(year_gap(filing) - 365))
+    )
     same_period = [
         filing
         for filing in eligible

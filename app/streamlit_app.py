@@ -35,6 +35,7 @@ from src.visualization.presentation import (  # noqa: E402
     format_metric_period,
     human_source_label,
     select_executive_metrics,
+    sentiment_label,
     sort_filings,
     verification_label,
 )
@@ -357,8 +358,8 @@ def render_metrics(metrics: list[dict[str, Any]]) -> None:
 
     with st.expander("Detailed metrics table"):
         st.caption(
-            "QoQ compares sequential quarters. YoY_YTD compares equivalent "
-            "year-to-date durations."
+            "YoY compares the same period one year earlier. YoY_YTD compares "
+            "equivalent year-to-date durations."
         )
         st.dataframe(
             pd.DataFrame(
@@ -414,10 +415,9 @@ def render_executive_snapshot(handoff: dict[str, Any]) -> None:
         with column.container(border=True):
             st.markdown(f"**{title}**")
             if title == "Management outlook":
-                sentiment = outlook["sentiment"]
                 st.badge(
-                    sentiment.upper(),
-                    color=SENTIMENT_COLORS.get(sentiment, "gray"),
+                    sentiment_label(outlook),
+                    color=SENTIMENT_COLORS.get(outlook["sentiment"], "gray"),
                 )
             st.markdown(md_escape(value))
 
@@ -450,14 +450,20 @@ def render_findings(handoff: dict[str, Any]) -> None:
 
 def render_outlook(outlook: dict[str, Any]) -> None:
     with st.container(border=True):
-        heading, badge = st.columns([4, 1], vertical_alignment="center")
+        heading, badge = st.columns([3, 2], vertical_alignment="center")
         with heading:
             st.subheader("Management outlook")
         with badge:
-            sentiment = outlook["sentiment"]
             st.badge(
-                sentiment.upper(),
-                color=SENTIMENT_COLORS.get(sentiment, "gray"),
+                sentiment_label(outlook),
+                color=SENTIMENT_COLORS.get(outlook["sentiment"], "gray"),
+            )
+        if outlook.get("rationale_sentence"):
+            score = outlook.get("rationale_score")
+            score_text = "" if score is None else f" ({score * 100:.1f}%)"
+            st.markdown(
+                f"> 📌 **Key evidence detected{score_text}:** "
+                f"\"{md_escape(outlook['rationale_sentence'])}\""
             )
         st.markdown(md_escape(outlook["summary"]))
 

@@ -45,7 +45,7 @@ def test_analysis_demo_success():
         assert key in body
     assert body["pipeline_metadata"]["analysis_mode"] == "demo"
     assert {m["comparison_type"] for m in body["financial_metrics"]} == {
-        "QoQ",
+        "YoY",
         "YoY_YTD",
         None,
     }
