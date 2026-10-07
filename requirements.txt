@@ -11,6 +11,9 @@ edgartools==5.21.1
 # Extraction and analysis
 pydantic>=2,<3
 rank-bm25==0.2.2
+# FinBERT outlook sentiment (ProsusAI/finbert, downloaded on first use)
+transformers>=4.46
+torch
 
 # Audio
 groq>=0.11.0

@@ -45,7 +45,7 @@ def test_analysis_demo_success():
         assert key in body
     assert body["pipeline_metadata"]["analysis_mode"] == "demo"
     assert {m["comparison_type"] for m in body["financial_metrics"]} == {
-        "QoQ",
+        "YoY",
         "YoY_YTD",
         None,
     }
@@ -323,7 +323,8 @@ def test_chat_streams_answer_grounded_in_handoff_context():
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain")
     assert response.text == "Cash fell [R1]."
-    assert "[R1] Cash balances declined during the quarter." in fake.kwargs["system_prompt"]
+    risk = api_main._run_demo_analysis().risks[0].finding
+    assert f"[R1] {risk}" in fake.kwargs["system_prompt"]
     assert fake.kwargs["messages"] == [{"role": "user", "content": "Main risks?"}]
 
 

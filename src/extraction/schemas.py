@@ -85,6 +85,10 @@ class ManagementOutlook(ExtractionSchema):
 
     summary: str = Field(min_length=1)
     sentiment: Sentiment = "unknown"
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    model: str | None = Field(default=None, min_length=1)
+    rationale_sentence: str | None = Field(default=None, min_length=1)
+    rationale_score: float | None = Field(default=None, ge=0.0, le=1.0)
     source_ids: list[str] = Field(default_factory=list)
 
 

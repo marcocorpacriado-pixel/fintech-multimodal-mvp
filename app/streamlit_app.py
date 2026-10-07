@@ -36,8 +36,8 @@ from src.visualization.presentation import (  # noqa: E402
     format_display_date,
     format_metric_period,
     human_source_label,
-    normalize_ticker_for_ui,
     select_executive_metrics,
+    sentiment_label,
     sort_filings,
     text_for_speech,
     verification_label,
@@ -61,6 +61,38 @@ SENTIMENT_COLORS = {
     "neutral": "gray",
     "unknown": "gray",
 }
+# Tickers offered in real mode; filings for each are discovered live from SEC.
+TICKERS = {
+    "AAPL": "Apple Inc.",
+    "AMZN": "Amazon.com, Inc.",
+    "BAC": "Bank of America Corporation",
+    "GOOGL": "Alphabet Inc.",
+    "GS": "The Goldman Sachs Group, Inc.",
+    "JNJ": "Johnson & Johnson",
+    "JPM": "JPMorgan Chase & Co.",
+    "META": "Meta Platforms, Inc.",
+    "MSFT": "Microsoft Corporation",
+    "NVDA": "NVIDIA Corporation",
+    "TSLA": "Tesla, Inc.",
+    "UNH": "UnitedHealth Group Incorporated",
+}
+# Base tokens live in .streamlit/config.toml; this only covers what the theme can't (DESIGN.md).
+# The status widget is hidden because it cycles informal pictograms; st.spinner gives feedback.
+TERMINAL_CSS = """
+<style>
+[data-testid="stStatusWidget"] { display: none; }
+[data-testid="stMainBlockContainer"] { padding-top: 4rem; padding-bottom: 1.5rem; }
+[data-testid="stMetricLabel"] p {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.04em; color: #94A3B8;
+}
+[data-testid="stMetricValue"] { font-weight: 700; }
+.st-key-report_header {
+    position: sticky; top: 3.75rem; z-index: 99;
+    background: #0B0F19; border-bottom: 1px solid #334155; padding-bottom: 0.5rem;
+}
+</style>
+"""
 
 
 def md_escape(text: str) -> str:
@@ -199,12 +231,6 @@ def _render_filing_selector(
     return selected
 
 
-def _uppercase_ticker_widget() -> None:
-    value = st.session_state.get("ticker_input")
-    if isinstance(value, str):
-        st.session_state.ticker_input = value.strip().upper()
-
-
 def render_sidebar() -> tuple[dict[str, Any] | None, bool]:
     """Render only analysis configuration; audio controls live by the summary."""
 
@@ -219,24 +245,16 @@ def render_sidebar() -> tuple[dict[str, Any] | None, bool]:
         payload: dict[str, Any] | None
         if mode == "Real":
             st.caption("LIVE | SEC filing and configured OpenRouter model")
-            raw_ticker = st.text_input(
+            ticker = st.selectbox(
                 "Ticker",
-                "AAPL",
-                max_chars=15,
-                key="ticker_input",
-                on_change=_uppercase_ticker_widget,
+                list(TICKERS),
+                format_func=lambda t: f"{t} · {TICKERS[t]}",
+                key="ticker_select",
             )
-            ticker = normalize_ticker_for_ui(raw_ticker)
             filing_type = st.selectbox("Filing type", ["10-Q", "10-K"])
-            selected: dict[str, Any] | None = None
-            if ticker is None:
-                st.warning("Enter a valid ticker, for example AAPL, BRK.B, or BRK-B.")
-            else:
-                if ticker != raw_ticker.strip():
-                    st.caption(f"Using normalized ticker: {ticker}")
-                selected = _render_filing_selector(ticker, filing_type)
+            selected = _render_filing_selector(ticker, filing_type)
             payload = None
-            if ticker is not None and selected is not None:
+            if selected is not None:
                 payload = {
                     "ticker": ticker,
                     "filing_date": selected["filing_date"],
@@ -260,38 +278,39 @@ def render_product_header() -> None:
 def render_analysis_header(handoff: dict[str, Any]) -> str:
     meta = handoff["pipeline_metadata"]
     state = verification_label(handoff["verification"])
-    mode_column, verification_column = st.columns([1, 4])
-    with mode_column:
-        if meta["analysis_mode"] == "real":
-            st.badge("LIVE ANALYSIS", color="green")
-        else:
-            st.badge("DEMO | SYNTHETIC", color="orange")
-    with verification_column:
-        state_color = {
-            "VERIFIED": "green",
-            "VERIFIED WITH WARNINGS": "orange",
-            "FAILED VERIFICATION": "red",
-        }[state]
-        st.badge(
-            state,
-            color=state_color,
-        )
+    with st.container(key="report_header"):
+        mode_column, verification_column = st.columns([1, 4])
+        with mode_column:
+            if meta["analysis_mode"] == "real":
+                st.badge("LIVE ANALYSIS", icon=":material/verified:", color="green")
+            else:
+                st.badge("DEMO | SYNTHETIC", icon=":material/science:", color="orange")
+        with verification_column:
+            state_color = {
+                "VERIFIED": "green",
+                "VERIFIED WITH WARNINGS": "orange",
+                "FAILED VERIFICATION": "red",
+            }[state]
+            st.badge(
+                state,
+                color=state_color,
+            )
 
-    company, ticker = st.columns([4, 1], vertical_alignment="bottom")
-    with company:
-        st.header(md_escape(handoff["company"]))
-    with ticker:
-        st.subheader(md_escape(handoff["ticker"]))
+        company, ticker = st.columns([4, 1], vertical_alignment="bottom")
+        with company:
+            st.header(md_escape(handoff["company"]))
+        with ticker:
+            st.subheader(md_escape(handoff["ticker"]))
 
-    facts = [
-        handoff["filing_type"],
-        f"Report period: {format_display_date(handoff['period'])}",
-    ]
-    if meta.get("filing_date"):
-        facts.append(f"Filed: {format_display_date(meta['filing_date'])}")
-    st.caption(" | ".join(facts))
-    if meta["analysis_mode"] == "demo":
-        st.caption("Deterministic synthetic fixture | No SEC or LLM request")
+        facts = [
+            handoff["filing_type"],
+            f"Report period: {format_display_date(handoff['period'])}",
+        ]
+        if meta.get("filing_date"):
+            facts.append(f"Filed: {format_display_date(meta['filing_date'])}")
+        st.caption(" | ".join(facts))
+        if meta["analysis_mode"] == "demo":
+            st.caption("Deterministic synthetic fixture | No SEC or LLM request")
     return state
 
 
@@ -350,8 +369,8 @@ def render_metrics(metrics: list[dict[str, Any]]) -> None:
 
     with st.expander("Detailed metrics table"):
         st.caption(
-            "QoQ compares sequential quarters. YoY_YTD compares equivalent "
-            "year-to-date durations."
+            "YoY compares the same period one year earlier. YoY_YTD compares "
+            "equivalent year-to-date durations."
         )
         st.dataframe(
             pd.DataFrame(
@@ -407,10 +426,9 @@ def render_executive_snapshot(handoff: dict[str, Any]) -> None:
         with column.container(border=True):
             st.markdown(f"**{title}**")
             if title == "Management outlook":
-                sentiment = outlook["sentiment"]
                 st.badge(
-                    sentiment.upper(),
-                    color=SENTIMENT_COLORS.get(sentiment, "gray"),
+                    sentiment_label(outlook),
+                    color=SENTIMENT_COLORS.get(outlook["sentiment"], "gray"),
                 )
             st.markdown(md_escape(value))
 
@@ -443,14 +461,20 @@ def render_findings(handoff: dict[str, Any]) -> None:
 
 def render_outlook(outlook: dict[str, Any]) -> None:
     with st.container(border=True):
-        heading, badge = st.columns([4, 1], vertical_alignment="center")
+        heading, badge = st.columns([3, 2], vertical_alignment="center")
         with heading:
             st.subheader("Management outlook")
         with badge:
-            sentiment = outlook["sentiment"]
             st.badge(
-                sentiment.upper(),
-                color=SENTIMENT_COLORS.get(sentiment, "gray"),
+                sentiment_label(outlook),
+                color=SENTIMENT_COLORS.get(outlook["sentiment"], "gray"),
+            )
+        if outlook.get("rationale_sentence"):
+            score = outlook.get("rationale_score")
+            score_text = "" if score is None else f" ({score * 100:.1f}%)"
+            st.markdown(
+                f"> 📌 **Key evidence detected{score_text}:** "
+                f"\"{md_escape(outlook['rationale_sentence'])}\""
             )
         st.markdown(md_escape(outlook["summary"]))
 
@@ -759,7 +783,13 @@ def render_result(handoff: dict[str, Any]) -> None:
         return
 
     overview, financials, narrative, sources, ask = st.tabs(
-        ["Overview", "Financials", "Narrative", "Sources", "Ask"],
+        [
+            ":material/dashboard: Overview",
+            ":material/monitoring: Financials",
+            ":material/article: Narrative",
+            ":material/verified_user: Sources",
+            ":material/forum: Ask",
+        ],
         # Keyed + rerun so the active tab survives reruns triggered by the chat.
         key="result_tabs",
         on_change="rerun",
@@ -780,25 +810,21 @@ def render_result(handoff: dict[str, Any]) -> None:
         render_chat(handoff)
 
 
-def _hide_native_running_widget() -> None:
-    """Hide Streamlit's header "Running..." widget.
-
-    That built-in widget cycles through informal pictograms (cyclist, swimmer,
-    wheelchair). Loading feedback is given by the neutral ``st.spinner`` blocks.
-    """
-
-    st.html("<style>[data-testid=\"stStatusWidget\"]{display:none;}</style>")
-
-
 def main() -> None:
     st.set_page_config(
         page_title="Financial Intelligence Copilot",
         page_icon=":material/query_stats:",
         layout="wide",
     )
-    _hide_native_running_widget()
+    st.html(TERMINAL_CSS)  # static constant, no user data
     render_product_header()
     payload, run = render_sidebar()
+
+    # First visit: run the demo once so the dashboard is never empty. The flag
+    # stops retries if the API is down or the user later clears the report.
+    if "handoff" not in st.session_state and not st.session_state.get("demo_autoloaded"):
+        st.session_state.demo_autoloaded = True
+        payload, run = {"ticker": "DEMO", "mode": "demo"}, True
 
     previous_error = st.session_state.get("analysis_error")
     retry = render_error(previous_error) if previous_error and not run else False

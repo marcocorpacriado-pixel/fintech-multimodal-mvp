@@ -32,8 +32,27 @@ def test_context_tags_every_item_and_copies_values_verbatim():
         assert f"[M{index}] {metric.name}:" in context
     assert "change_pct=5.9322033898" in context  # not rounded or recomputed
     assert f'evidence: "{handoff.risks[0].evidence}"' in context
-    assert f"[O1] {handoff.management_outlook.summary}" in context
+    outlook = handoff.management_outlook
+    assert f"[O1] {outlook.summary} (sentiment: {outlook.sentiment}" in context
+    assert f"confidence {outlook.confidence} by {outlook.model}" in context
+    assert f'supporting sentence: "{outlook.rationale_sentence}"' in context
     assert f"[S1] {handoff.executive_summary}" in context
+
+
+def test_outlook_without_model_scoring_has_no_confidence():
+    handoff = _handoff()
+    outlook = handoff.management_outlook.model_copy(
+        update={
+            "confidence": None,
+            "model": None,
+            "rationale_sentence": None,
+            "rationale_score": None,
+        }
+    )
+    context = build_chat_context(handoff.model_copy(update={"management_outlook": outlook}))
+
+    assert f"[O1] {outlook.summary} (sentiment: {outlook.sentiment})" in context
+    assert "confidence" not in context
 
 
 def test_context_is_deterministic_and_handles_empty_lists():
@@ -63,7 +82,7 @@ def test_cited_sources_keeps_known_tags_once_in_order():
     answer = "Cash fell [R1]; revenue rose [M1]. Again [R1]. Fake [M99]."
 
     assert cited_sources(answer, handoff) == [
-        ("R1", "Risk: Cash balances declined during the quarter."),
+        ("R1", f"Risk: {handoff['risks'][0]['finding']}"),
         ("M1", "Metric: Revenue"),
     ]
 

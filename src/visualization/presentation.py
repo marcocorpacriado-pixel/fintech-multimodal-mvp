@@ -224,6 +224,18 @@ def text_for_speech(answer: str) -> str:
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
+def sentiment_label(outlook: Mapping[str, Any]) -> str:
+    """Sentiment badge text, with the scoring model's confidence when provided."""
+
+    label = str(outlook.get("sentiment") or "unknown").upper()
+    confidence = outlook.get("confidence")
+    if confidence is None:
+        return label
+    model = str(outlook.get("model") or "")
+    model_name = "FinBERT" if "finbert" in model.lower() else model or "model"
+    return f"{label} · {confidence * 100:.1f}% confidence · {model_name}"
+
+
 def human_source_label(filing_type: str, source_section: str | None) -> str:
     """Present a canonical SEC section before its technical identifier."""
 
@@ -243,6 +255,7 @@ __all__ = [
     "human_source_label",
     "normalize_ticker_for_ui",
     "select_executive_metrics",
+    "sentiment_label",
     "sort_filings",
     "text_for_speech",
     "verification_label",

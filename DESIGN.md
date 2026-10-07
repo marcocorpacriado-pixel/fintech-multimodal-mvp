@@ -36,13 +36,15 @@ Proporcionar una interfaz analítica institucional de alto contraste, sobria y l
 |---|---|---|
 | Tema nativo | `.streamlit/config.toml` | Colores base, fuente Inter, radio 8px, bordes, tamaño de valor KPI, colores de badges |
 | Componentes nativos | `app/streamlit_app.py` | Jerarquía, tarjetas, pestañas y detalle expandible |
+| CSS inyectado | `app/streamlit_app.py` (`TERMINAL_CSS`) | Padding vertical, etiquetas KPI uppercase, cabecera sticky |
 | Plotly | `src/visualization/financial_charts.py` | Comparativas y cambios porcentuales sin recalcular métricas |
 
 Streamlit lee `.streamlit/config.toml` desde el directorio de trabajo: arrancar siempre desde la raíz (`streamlit run app/streamlit_app.py`).
 
 ## Component Layout Rules (Streamlit Native)
 
-- **Header:** Ticker, periodo reportado, filing date, tipo de filing y estado LIVE / DEMO.
+- **Header:** Sticky. Ticker, periodo reportado, filing date, tipo de filing y estado LIVE / DEMO.
+- **Sidebar (real):** Ticker desde lista cerrada (`TICKERS`); los filings se descubren en vivo vía `GET /api/v1/filings/{ticker}`.
 - **Tabs (`st.tabs`):**
   1. **Overview:** snapshot ejecutivo y mensajes clave.
   2. **Financials:** siete métricas canónicas, gráficos y tabla detallada.

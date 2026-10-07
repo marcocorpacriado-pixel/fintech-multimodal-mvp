@@ -89,6 +89,17 @@ def _evidence_line(item) -> str:
     return f'{item.finding} | evidence: "{item.evidence}"{section}'
 
 
+def _outlook_line(handoff: AnalysisHandoff) -> str:
+    outlook = handoff.management_outlook
+    scoring = f"sentiment: {outlook.sentiment}"
+    if outlook.confidence is not None:
+        scoring += f", confidence {outlook.confidence} by {outlook.model or 'model'}"
+    line = f"{outlook.summary} ({scoring})"
+    if outlook.rationale_sentence:
+        line += f' | supporting sentence: "{outlook.rationale_sentence}"'
+    return line
+
+
 def _tagged_items(handoff: AnalysisHandoff) -> list[tuple[str, str, str]]:
     """Return ``(tag, label, context_line)`` in a stable order."""
 
@@ -99,14 +110,7 @@ def _tagged_items(handoff: AnalysisHandoff) -> list[tuple[str, str, str]]:
         items.append((f"P{index}", f"Positive: {item.finding}", _evidence_line(item)))
     for index, item in enumerate(handoff.risks, start=1):
         items.append((f"R{index}", f"Risk: {item.finding}", _evidence_line(item)))
-    outlook = handoff.management_outlook
-    items.append(
-        (
-            "O1",
-            "Management outlook",
-            f"{outlook.summary} (sentiment: {outlook.sentiment})",
-        )
-    )
+    items.append(("O1", "Management outlook", _outlook_line(handoff)))
     items.append(("S1", "Executive summary", handoff.executive_summary))
     return items
 

@@ -14,6 +14,7 @@ from src.visualization.presentation import (
     human_source_label,
     normalize_ticker_for_ui,
     select_executive_metrics,
+    sentiment_label,
     sort_filings,
     verification_label,
 )
@@ -210,3 +211,18 @@ def test_human_source_labels_prioritize_readable_provenance():
         "10-Q · Item 1A · Risk Factors"
     )
     assert human_source_label("10-Q", None) == "10-Q · Unsectioned filing content"
+
+
+@pytest.mark.parametrize(
+    ("outlook", "expected"),
+    [
+        (
+            {"sentiment": "positive", "confidence": 0.942, "model": "ProsusAI/finbert"},
+            "POSITIVE · 94.2% confidence · FinBERT",
+        ),
+        ({"sentiment": "mixed", "confidence": None, "model": None}, "MIXED"),
+        ({"sentiment": "unknown"}, "UNKNOWN"),
+    ],
+)
+def test_sentiment_label_shows_model_confidence_only_when_scored(outlook, expected):
+    assert sentiment_label(outlook) == expected
