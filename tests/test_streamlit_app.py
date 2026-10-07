@@ -127,7 +127,7 @@ def test_real_mode_uses_discovered_filing_and_separates_dates():
         patch("src.api.main._run_real_analysis", return_value=handoff) as analysis,
     ):
         at = _run_real_sidebar(_app_test().run())
-        assert any("Report Jun 27, 2026" in option for option in at.sidebar.selectbox[1].options)
+        assert any("Report Jun 27, 2026" in option for option in at.sidebar.selectbox[2].options)
         _button(at, "Analyze filing").click().run()
 
     assert not at.exception
@@ -148,18 +148,20 @@ def test_real_mode_uses_discovered_filing_and_separates_dates():
     )
 
 
-def test_invalid_ticker_stops_before_filing_discovery():
+def test_ticker_is_chosen_from_list_and_drives_filing_discovery():
     with (
         patch("httpx.request", side_effect=_route_to_test_client),
         patch("src.api.main.list_voices", return_value=["af_heart"]),
-        patch("src.api.main.discover_sec_filings") as discovery,
+        patch("src.api.main.discover_sec_filings", return_value=[]) as discovery,
     ):
         at = _run_real_sidebar(_app_test().run())
-        at.sidebar.text_input[0].set_value("AAPL$").run()
+        ticker = at.sidebar.selectbox(key="ticker_select")
+        assert ticker.value == "AAPL"
+        assert "MSFT · Microsoft Corporation" in ticker.options
+        ticker.set_value("MSFT").run()
 
-    assert "Enter a valid ticker" in _all_text(at)
-    discovery.assert_called_once()  # initial valid AAPL render only
-    assert not any(box.label == "SEC filing" for box in at.sidebar.selectbox)
+    assert not at.sidebar.text_input
+    assert discovery.call_args.kwargs["ticker"] == "MSFT"
 
 
 def test_no_filings_has_clear_empty_state():
@@ -240,7 +242,7 @@ def test_retryable_llm_error_preserves_configuration_and_offers_retry():
     assert "AI provider did not return a usable response" in text
     assert "selected configuration is preserved" in text
     assert "SECRET" not in text
-    assert at.sidebar.text_input[0].value == "AAPL"
+    assert at.sidebar.selectbox(key="ticker_select").value == "AAPL"
     assert any(button.label == "Retry analysis" for button in at.button)
 
 
@@ -294,10 +296,10 @@ def test_results_use_layered_information_architecture_and_snapshot():
         _button(at, "Analyze filing").click().run()
 
     assert [tab.label for tab in at.tabs] == [
-        "Overview",
-        "Financials",
-        "Narrative",
-        "Sources",
+        ":material/dashboard: Overview",
+        ":material/monitoring: Financials",
+        ":material/article: Narrative",
+        ":material/verified_user: Sources",
     ]
     assert "Executive snapshot" in _all_text(at)
     assert [metric.label for metric in at.metric[:4]] == [
@@ -360,7 +362,7 @@ def test_native_running_widget_with_informal_pictograms_is_hidden():
     assert not at.exception
     source = APP_PATH.read_text(encoding="utf-8")
     assert "stStatusWidget" in source
-    assert "display:none" in source
+    assert "stStatusWidget\"] { display: none; }" in source
 
 
 def test_app_never_imports_backend_modules():
