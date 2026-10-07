@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import src.api.main as api_main
 from src.api.main import app
 from src.extraction import (
+    GroundedAnalysisError,
     LLMTransportError,
     PipelineInputError,
     SECFilingMetadata,
@@ -73,6 +74,27 @@ def test_analysis_error_handling(error, status, code):
     assert "SECRET" not in response.text
     assert "secret" not in response.text
     assert "Traceback" not in response.text
+
+
+def test_analysis_logs_safe_request_diagnostic_without_raw_grounding_text(
+    caplog,
+):
+    raw = "evidence for 'chunk:private-secret' is not a chunk excerpt"
+    with patch("src.api.main._run_real_analysis", side_effect=GroundedAnalysisError(raw)):
+        response = client.post(
+            "/api/v1/analysis",
+            json={
+                "ticker": "AAPL",
+                "filing_date": "2026-07-31",
+                "mode": "real",
+            },
+        )
+
+    assert response.status_code == 422
+    assert "request_id=" in caplog.text
+    assert "category=GROUNDING_ERROR" in caplog.text
+    assert "reason=EVIDENCE_NOT_IN_SOURCE" in caplog.text
+    assert "private-secret" not in caplog.text
 
 
 def test_analysis_real_mode_rejects_legacy_period_field():

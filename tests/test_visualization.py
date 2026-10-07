@@ -4,12 +4,16 @@ import pytest
 from src.visualization.financial_charts import (
     format_change_pct,
     format_value,
+    render_metrics_change_chart,
     render_metrics_comparison_chart,
 )
 from src.visualization.presentation import (
     error_presentation,
     filing_option_label,
+    format_metric_period,
+    human_source_label,
     normalize_ticker_for_ui,
+    select_executive_metrics,
     sort_filings,
     verification_label,
 )
@@ -69,6 +73,29 @@ def test_chart_handles_none_values():
     figure.to_json()  # serializes without errors
 
     assert len(render_metrics_comparison_chart(metrics[1:]).data) == 0
+
+
+def test_change_chart_uses_delivered_percentages_and_neutral_colour():
+    metrics = [
+        _metric("Revenue", 100.0, 90.0, 11.111),
+        _metric("Total Debt", 50.0, None, None, comparison=None),
+    ]
+
+    figure = render_metrics_change_chart(metrics)
+
+    assert list(figure.data[0].x) == [11.111]
+    assert list(figure.data[0].y) == ["Revenue"]
+    assert figure.data[0].marker.color == "#607d8b"
+    assert "Total Debt" not in figure.data[0].y
+
+
+def test_change_chart_handles_no_comparable_metrics():
+    figure = render_metrics_change_chart(
+        [_metric("Total Debt", 50.0, None, None, comparison=None)]
+    )
+
+    assert len(figure.data) == 0
+    assert figure.layout.annotations[0].text == "No comparable changes available"
 
 
 def test_format_change_pct_uses_percentage_points_as_is():
@@ -147,3 +174,39 @@ def test_verification_labels_distinguish_valid_warning_and_failure():
     assert verification_label(
         {"valid": False, "issues": [{"severity": "error"}]}
     ) == "FAILED VERIFICATION"
+
+
+def test_metric_periods_are_humanized_without_inventing_quarters():
+    assert format_metric_period("2026-04-01/2026-06-27") == "Apr 1–Jun 27, 2026"
+    assert format_metric_period("2026-06-27") == "Jun 27, 2026"
+    assert format_metric_period(None) == "Not available"
+
+
+def test_executive_snapshot_uses_fixed_canonical_order_without_recalculation():
+    metrics = [
+        _metric("Capital Expenditures", 7.0, 8.0, -12.5),
+        _metric("Operating Cash Flow", 117.0, 82.0, 43.1),
+        _metric("Diluted EPS", 2.02, 2.01, 0.5, unit="usdPerShare"),
+        _metric("Revenue", 109.4, 111.2, -1.6),
+        _metric("Net Income", 29.8, 29.6, 0.7),
+    ]
+
+    snapshot = select_executive_metrics(metrics)
+
+    assert [metric["name"] for metric in snapshot] == [
+        "Revenue",
+        "Net Income",
+        "Diluted EPS",
+        "Operating Cash Flow",
+    ]
+    assert snapshot[0]["change_pct"] == -1.6
+
+
+def test_human_source_labels_prioritize_readable_provenance():
+    assert human_source_label("10-Q", "PART_I_ITEM_2") == (
+        "10-Q · Item 2 · Management Discussion & Analysis"
+    )
+    assert human_source_label("10-Q", "PART_II_ITEM_1A") == (
+        "10-Q · Item 1A · Risk Factors"
+    )
+    assert human_source_label("10-Q", None) == "10-Q · Unsectioned filing content"

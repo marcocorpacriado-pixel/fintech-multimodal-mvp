@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 NOT_AVAILABLE = "N/A"
 CURRENT_COLOR = "#2a78d6"   # categorical slot 1 (blue)
 PREVIOUS_COLOR = "#7b8794"  # neutral comparison series
+CHANGE_COLOR = "#607d8b"    # neutral: direction is not investment sentiment
 UNIT_LABELS = {"usd": "USD values", "usdPerShare": "Per-share values"}
 
 
@@ -115,6 +116,72 @@ def render_metrics_comparison_chart(financial_metrics: list[dict]) -> go.Figure:
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.04, "x": 0},
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
+        uniformtext_minsize=10,
+    )
+    return figure
+
+
+def render_metrics_change_chart(financial_metrics: list[dict]) -> go.Figure:
+    """Render delivered percentage changes without assigning good/bad colours."""
+
+    comparable = [
+        metric
+        for metric in financial_metrics
+        if metric.get("change_pct") is not None
+    ]
+    if not comparable:
+        figure = go.Figure()
+        figure.add_annotation(
+            text="No comparable changes available",
+            showarrow=False,
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+        )
+        figure.update_xaxes(visible=False)
+        figure.update_yaxes(visible=False)
+        figure.update_layout(height=200)
+        return figure
+
+    figure = go.Figure(
+        go.Bar(
+            orientation="h",
+            y=[metric["name"] for metric in comparable],
+            x=[metric["change_pct"] for metric in comparable],
+            text=[format_change_pct(metric["change_pct"]) for metric in comparable],
+            textposition="outside",
+            customdata=[
+                [
+                    metric.get("comparison_type") or NOT_AVAILABLE,
+                    metric.get("current_period") or NOT_AVAILABLE,
+                    metric.get("previous_period") or NOT_AVAILABLE,
+                ]
+                for metric in comparable
+            ],
+            hovertemplate=(
+                "<b>%{y}</b><br>Change: %{text}<br>"
+                "Comparison: %{customdata[0]}<br>"
+                "Current period: %{customdata[1]}<br>"
+                "Previous period: %{customdata[2]}<extra></extra>"
+            ),
+            marker={"color": CHANGE_COLOR, "cornerradius": 4},
+        )
+    )
+    figure.update_yaxes(autorange="reversed")
+    figure.update_xaxes(
+        ticksuffix="%",
+        showgrid=True,
+        gridcolor="rgba(127,127,127,0.15)",
+        zeroline=True,
+        zerolinecolor="rgba(127,127,127,0.6)",
+    )
+    figure.update_layout(
+        height=150 + 48 * len(comparable),
+        margin={"l": 10, "r": 60, "t": 20, "b": 30},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        showlegend=False,
         uniformtext_minsize=10,
     )
     return figure

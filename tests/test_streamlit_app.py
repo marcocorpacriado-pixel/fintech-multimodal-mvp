@@ -100,14 +100,15 @@ def test_demo_analysis_renders_professional_dashboard():
 
     assert not at.exception
     text = _all_text(at)
-    assert "deterministic synthetic demo data" in text
+    assert "Deterministic synthetic fixture | No SEC or LLM request" in text
+    assert "DEMO | SYNTHETIC" in text
     assert "Demo Corp" in text
     assert "Financial Intelligence Copilot" in text
-    assert "passed with non-blocking warnings" in text
-    assert len(at.metric) == 7
+    assert "VERIFIED WITH WARNINGS" in text
+    assert len(at.metric) == 11  # 4-metric snapshot plus the 7-metric financial grid
     assert at.metric[0].value == "$1.25B"
     assert "N/A" in text
-    assert any(expander.label == "View evidence" for expander in at.expander)
+    assert any("Item 2 · Management Discussion & Analysis" in e.label for e in at.expander)
     assert any(expander.label == "Technical details" for expander in at.expander)
     technical = dict(at.dataframe[-1].value.itertuples(index=False, name=None))
     assert technical["Analysis mode"] == "demo"
@@ -135,7 +136,7 @@ def test_real_mode_uses_discovered_filing_and_separates_dates():
     text = _all_text(at)
     assert "Report period: Jun 27, 2026" in text
     assert "Filed: Jul 31, 2026" in text
-    assert "Deterministic verification passed" in text
+    assert "VERIFIED" in text
     technical = dict(at.dataframe[-1].value.itertuples(index=False, name=None))
     assert technical["Provider"] == "openrouter"
     assert technical["Model"] == "deepseek/deepseek-v4-flash"
@@ -199,12 +200,14 @@ def test_grounding_error_is_blocked_and_explained_without_partial_result():
     ):
         at = _run_real_sidebar(_app_test().run())
         _button(at, "Analyze filing").click().run()
+        at.run()
 
     text = _all_text(at)
     assert "did not pass evidence checks" in text
     assert "exact, contiguous filing excerpt" in text
     assert "raw evidence" not in text
     assert len(at.metric) == 0
+    assert any(button.label == "Retry analysis" for button in at.button)
     assert not at.exception
 
 
@@ -250,7 +253,7 @@ def test_failed_verification_never_renders_analysis_as_valid():
         at = _app_test().run()
         _button(at, "Analyze filing").click().run()
 
-    assert "Verification failed" in _all_text(at)
+    assert "failed deterministic verification" in _all_text(at)
     assert len(at.metric) == 0
     assert not at.exception
 
@@ -269,6 +272,84 @@ def test_tts_still_uses_executive_summary_without_rerunning_analysis():
     assert not at.exception
     assert synthesize.call_args.kwargs["text"] == _run_demo_analysis().executive_summary
     assert "Audio generated from synthetic demo analysis" in _all_text(at)
+
+
+def test_results_use_layered_information_architecture_and_snapshot():
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+
+    assert [tab.label for tab in at.tabs] == [
+        "Overview",
+        "Financials",
+        "Narrative",
+        "Sources",
+    ]
+    assert "Executive snapshot" in _all_text(at)
+    assert [metric.label for metric in at.metric[:4]] == [
+        "Revenue",
+        "Net Income",
+        "Diluted EPS",
+        "Operating Cash Flow",
+    ]
+
+
+def test_change_chart_is_default_and_values_view_is_available():
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+
+    chart_radio = next(radio for radio in at.radio if radio.label == "Financial chart")
+    assert chart_radio.value == "Change %"
+    assert chart_radio.options == ["Change %", "Values"]
+    assert len(at.get("plotly_chart")) == 1
+
+    chart_radio.set_value("Values").run()
+    assert not at.exception
+
+
+def test_audio_preference_is_local_to_summary_not_sidebar():
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart", "bf_emma"]),
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+
+    assert not any(box.label == "Voice" for box in at.sidebar.selectbox)
+    assert any(box.label == "Voice" for box in at.selectbox)
+    assert any(button.label == "Copy summary" for button in at.button)
+    assert any(button.label == "Listen to summary" for button in at.button)
+
+
+def test_loading_uses_neutral_spinner_and_no_status_widget_or_decorative_emoji():
+    source = APP_PATH.read_text(encoding="utf-8")
+
+    assert "st.status(" not in source
+    assert 'st.spinner("Preparing analysis")' in source
+    for informal_icon in ("🏊", "♿", "🐶", "🐱"):
+        assert informal_icon not in source
+
+
+def test_native_running_widget_with_informal_pictograms_is_hidden():
+    # Streamlit's own header "Running..." widget cycles cyclist/swimmer/wheelchair
+    # icons on every rerun; the app hides it and relies on neutral spinners.
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+    ):
+        at = _app_test().run()
+
+    assert not at.exception
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert "stStatusWidget" in source
+    assert "display:none" in source
 
 
 def test_app_never_imports_backend_modules():

@@ -7,6 +7,7 @@ This module only orchestrates and serializes. Financial values come from the
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import date
 from pathlib import Path
 from typing import Literal
@@ -34,6 +35,7 @@ from src.integration import (
     AnalysisMode,
     IntegrationError,
     build_analysis_handoff,
+    diagnose_integration_failure,
     map_integration_error,
 )
 
@@ -132,7 +134,11 @@ def _run_demo_analysis() -> AnalysisHandoff:
     return build_analysis_handoff(result, analysis_mode="demo", provider="fixture")
 
 
-def _run_real_analysis(request: AnalysisRequest) -> AnalysisHandoff:
+def _run_real_analysis(
+    request: AnalysisRequest,
+    *,
+    request_id: str = "not-provided",
+) -> AnalysisHandoff:
     """SEC ingestion -> grounded pipeline -> handoff. No fallback to demo."""
 
     if request.filing_date is None:  # guarded by AnalysisRequest validation
@@ -143,24 +149,37 @@ def _run_real_analysis(request: AnalysisRequest) -> AnalysisHandoff:
         filing_date=request.filing_date,
         form=request.filing_type,
     )
-    with OpenRouterLLMClient.from_env() as llm:
-        result = run_analysis_pipeline(
-            filing_path=inputs.filing_path,
-            company=inputs.company,
-            ticker=inputs.ticker,
-            period=inputs.report_period,
-            filing_type=inputs.filing_type,
-            current_xbrl_filing=inputs.current_filing,
-            previous_xbrl_filing=inputs.previous_filing,
-            llm_client=llm,
+    try:
+        with OpenRouterLLMClient.from_env() as llm:
+            result = run_analysis_pipeline(
+                filing_path=inputs.filing_path,
+                company=inputs.company,
+                ticker=inputs.ticker,
+                period=inputs.report_period,
+                filing_type=inputs.filing_type,
+                current_xbrl_filing=inputs.current_filing,
+                previous_xbrl_filing=inputs.previous_filing,
+                llm_client=llm,
+            )
+            return build_analysis_handoff(
+                result,
+                analysis_mode="real",
+                provider="openrouter",
+                model=llm.model,
+                filing_date=inputs.filing_date,
+            )
+    except Exception as error:
+        diagnostic = diagnose_integration_failure(error)
+        logger.warning(
+            "real analysis rejected request_id=%s accession=%s category=%s "
+            "reason=%s verification_issues=%s",
+            request_id,
+            inputs.current_accession,
+            diagnostic.category,
+            diagnostic.reason_code,
+            ",".join(diagnostic.verification_issue_codes) or "none",
         )
-        return build_analysis_handoff(
-            result,
-            analysis_mode="real",
-            provider="openrouter",
-            model=llm.model,
-            filing_date=inputs.filing_date,
-        )
+        raise
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -218,13 +237,21 @@ def voices() -> dict:
     responses=_ERROR_RESPONSES,
 )
 def analysis(request: AnalysisRequest):
+    request_id = uuid.uuid4().hex
     try:
         if request.mode == "real":
-            handoff = _run_real_analysis(request)
+            handoff = _run_real_analysis(request, request_id=request_id)
         else:
             handoff = _run_demo_analysis()
     except Exception as error:
-        logger.exception("analysis failed (mode=%s)", request.mode)
+        diagnostic = diagnose_integration_failure(error)
+        logger.warning(
+            "analysis failed request_id=%s mode=%s category=%s reason=%s",
+            request_id,
+            request.mode,
+            diagnostic.category,
+            diagnostic.reason_code,
+        )
         return _error_response(map_integration_error(error))
     return handoff.model_dump(mode="json")
 

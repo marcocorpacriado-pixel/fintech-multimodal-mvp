@@ -62,6 +62,20 @@ class IntegrationError(BaseModel):
     retryable: bool
 
 
+class IntegrationDiagnostic(BaseModel):
+    """Small internal-only failure description safe for structured logs.
+
+    It deliberately excludes exception messages, prompts, evidence text and
+    provider responses.  API consumers continue to receive ``IntegrationError``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    category: IntegrationErrorCode
+    reason_code: str = Field(min_length=1)
+    verification_issue_codes: list[str] = Field(default_factory=list)
+
+
 _FILING_NOT_FOUND_ERRORS = (
     SECFilingNotFoundError,
     SECPreviousFilingNotFoundError,
@@ -104,13 +118,21 @@ def map_integration_error(error: BaseException) -> IntegrationError:
         return IntegrationError(
             code="VERIFICATION_ERROR",
             message="Analysis failed deterministic verification.",
-            retryable=False,
+            # The invalid result remains blocked, but a new provider generation
+            # may comply. Retry is always explicit; there is no automatic fallback.
+            retryable=True,
         )
-    if _contains(chain, GroundedAnalysisError):
+    grounding = next(
+        (item for item in chain if isinstance(item, GroundedAnalysisError)),
+        None,
+    )
+    if grounding is not None:
+        reason_code = _grounding_reason_code(str(grounding))
         return IntegrationError(
             code="GROUNDING_ERROR",
             message="Generated analysis failed evidence grounding.",
-            retryable=False,
+            # Empty retrieval is deterministic; malformed model citations are not.
+            retryable=reason_code != "EMPTY_RETRIEVAL",
         )
     if _contains(chain, LLMConfigurationError):
         return IntegrationError(
@@ -167,6 +189,73 @@ def map_integration_error(error: BaseException) -> IntegrationError:
     )
 
 
+def diagnose_integration_failure(error: BaseException) -> IntegrationDiagnostic:
+    """Classify a failure for safe internal logs without leaking source text."""
+
+    chain = _exception_chain(error)
+    mapped = map_integration_error(error)
+    verification = next(
+        (
+            item
+            for item in chain
+            if isinstance(item, (PipelineVerificationError, AnalysisVerificationError))
+        ),
+        None,
+    )
+    if verification is not None:
+        issue_codes = sorted({issue.code for issue in verification.report.issues})
+        return IntegrationDiagnostic(
+            category=mapped.code,
+            reason_code="DETERMINISTIC_VERIFICATION_REJECTED",
+            verification_issue_codes=issue_codes,
+        )
+
+    grounding = next(
+        (item for item in chain if isinstance(item, GroundedAnalysisError)),
+        None,
+    )
+    if grounding is not None:
+        return IntegrationDiagnostic(
+            category=mapped.code,
+            reason_code=_grounding_reason_code(str(grounding)),
+        )
+
+    return IntegrationDiagnostic(
+        category=mapped.code,
+        reason_code={
+            "INPUT_ERROR": "INVALID_INPUT",
+            "FILING_NOT_FOUND": "FILING_NOT_FOUND",
+            "SEC_INGESTION_ERROR": "SEC_INGESTION_FAILED",
+            "ANALYSIS_ERROR": "ANALYSIS_FAILED",
+            "LLM_PROVIDER_ERROR": "LLM_PROVIDER_FAILED",
+            "UNKNOWN_ERROR": "UNEXPECTED_FAILURE",
+        }.get(mapped.code, "UNCLASSIFIED_FAILURE"),
+    )
+
+
+def _grounding_reason_code(message: str) -> str:
+    """Map our controlled grounding messages to stable, non-sensitive codes."""
+
+    normalized = message.casefold()
+    if "not a chunk excerpt" in normalized:
+        return "EVIDENCE_NOT_IN_SOURCE"
+    if "source_section" in normalized and "does not match" in normalized:
+        return "SECTION_MISMATCH"
+    if "unknown outlook source_id" in normalized:
+        return "INVALID_OUTLOOK_SOURCE_ID"
+    if "unknown evidence source_id" in normalized:
+        return "INVALID_SOURCE_ID"
+    if "known management outlook sentiment requires" in normalized:
+        return "OUTLOOK_WITHOUT_EVIDENCE"
+    if "without retrieved evidence" in normalized or (
+        "require retrieved evidence" in normalized
+    ):
+        return "EMPTY_RETRIEVAL"
+    if "invalid llm output schema" in normalized:
+        return "INVALID_OUTPUT_SCHEMA"
+    return "GROUNDING_REJECTED"
+
+
 def _exception_chain(error: BaseException) -> tuple[BaseException, ...]:
     chain: list[BaseException] = []
     seen: set[int] = set()
@@ -186,7 +275,9 @@ def _contains(
 
 
 __all__ = [
+    "IntegrationDiagnostic",
     "IntegrationError",
     "IntegrationErrorCode",
+    "diagnose_integration_failure",
     "map_integration_error",
 ]

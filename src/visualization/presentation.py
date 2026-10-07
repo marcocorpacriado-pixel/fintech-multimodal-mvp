@@ -13,6 +13,27 @@ from typing import Any, Literal, Mapping, Sequence
 
 
 _TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,14}$")
+_SNAPSHOT_METRICS = (
+    "Revenue",
+    "Net Income",
+    "Diluted EPS",
+    "Operating Cash Flow",
+)
+_SECTION_LABELS = {
+    "PART_I_ITEM_1": "Item 1 · Financial Statements",
+    "PART_I_ITEM_2": "Item 2 · Management Discussion & Analysis",
+    "PART_I_ITEM_3": "Item 3 · Market Risk Disclosures",
+    "PART_I_ITEM_4": "Item 4 · Controls and Procedures",
+    "PART_II_ITEM_1": "Item 1 · Legal Proceedings",
+    "PART_II_ITEM_1A": "Item 1A · Risk Factors",
+    "PART_II_ITEM_2": "Item 2 · Unregistered Sales and Use of Proceeds",
+    "ITEM_1": "Item 1 · Business",
+    "ITEM_1A": "Item 1A · Risk Factors",
+    "ITEM_7": "Item 7 · Management Discussion & Analysis",
+    "ITEM_7A": "Item 7A · Market Risk Disclosures",
+    "ITEM_8": "Item 8 · Financial Statements",
+    "UNSECTIONED": "Unsectioned filing content",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +101,26 @@ def format_display_date(value: str | date | None) -> str:
     return parsed.strftime("%b %d, %Y")
 
 
+def format_metric_period(value: str | None) -> str:
+    """Humanize one instant or duration without inferring fiscal quarters."""
+
+    if not value:
+        return "Not available"
+    if "/" not in value:
+        return format_display_date(value)
+    start_text, end_text = value.split("/", 1)
+    try:
+        start = date.fromisoformat(start_text)
+        end = date.fromisoformat(end_text)
+    except ValueError:
+        return value
+    start_label = start.strftime("%b %d").replace(" 0", " ")
+    end_label = end.strftime("%b %d").replace(" 0", " ")
+    if start.year == end.year:
+        return f"{start_label}–{end_label}, {end.year}"
+    return f"{start_label}, {start.year}–{end_label}, {end.year}"
+
+
 def filing_option_label(filing: Mapping[str, Any]) -> str:
     """Build a human-readable filing selector label without inventing fiscal quarters."""
 
@@ -122,12 +163,42 @@ def verification_label(
     return "VERIFIED"
 
 
+def select_executive_metrics(
+    metrics: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = 4,
+) -> list[dict[str, Any]]:
+    """Select a fixed canonical snapshot without scoring or recomputation."""
+
+    by_name = {str(metric.get("name")): dict(metric) for metric in metrics}
+    selected = [by_name[name] for name in _SNAPSHOT_METRICS if name in by_name]
+    if len(selected) < limit:
+        selected_names = {metric["name"] for metric in selected}
+        selected.extend(
+            dict(metric)
+            for metric in metrics
+            if metric.get("name") not in selected_names
+        )
+    return selected[:limit]
+
+
+def human_source_label(filing_type: str, source_section: str | None) -> str:
+    """Present a canonical SEC section before its technical identifier."""
+
+    section = source_section or "UNSECTIONED"
+    readable = _SECTION_LABELS.get(section, section.replace("_", " ").title())
+    return f"{filing_type} · {readable}"
+
+
 __all__ = [
     "ErrorPresentation",
     "error_presentation",
     "filing_option_label",
     "format_display_date",
+    "format_metric_period",
+    "human_source_label",
     "normalize_ticker_for_ui",
+    "select_executive_metrics",
     "sort_filings",
     "verification_label",
 ]

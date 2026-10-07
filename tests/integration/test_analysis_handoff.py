@@ -36,6 +36,7 @@ from src.integration import (
     VerificationIssueDTO,
     build_analysis_handoff,
     build_tts_input,
+    diagnose_integration_failure,
     map_integration_error,
 )
 
@@ -340,7 +341,7 @@ def test_tts_metadata_is_minimal_and_correct(
         (SECFilingNotFoundError("missing"), "FILING_NOT_FOUND", False),
         (SECServiceError("network"), "SEC_INGESTION_ERROR", True),
         (SECIngestionError("network"), "SEC_INGESTION_ERROR", True),
-        (GroundedAnalysisError("citation"), "GROUNDING_ERROR", False),
+        (GroundedAnalysisError("citation"), "GROUNDING_ERROR", True),
         (LLMTransportError("timeout"), "LLM_PROVIDER_ERROR", True),
         (PipelineAnalysisError("analysis"), "ANALYSIS_ERROR", False),
         (ValueError("unexpected"), "UNKNOWN_ERROR", False),
@@ -380,7 +381,74 @@ def test_verification_error_mapping() -> None:
     )
     mapped = map_integration_error(PipelineVerificationError(report))
     assert mapped.code == "VERIFICATION_ERROR"
+    assert mapped.retryable is True
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "findings require retrieved evidence",
+        "management outlook must be unknown without retrieved evidence",
+    ],
+)
+def test_empty_retrieval_grounding_failure_is_not_retryable(message: str) -> None:
+    mapped = map_integration_error(GroundedAnalysisError(message))
+
+    assert mapped.code == "GROUNDING_ERROR"
     assert mapped.retryable is False
+
+
+def test_internal_diagnostic_exposes_verifier_codes_without_issue_text() -> None:
+    secret = "private evidence sk-or-secret"
+    report = VerificationReport(
+        valid=False,
+        issues=[
+            VerificationIssue(
+                code="UNSUPPORTED_NUMBER",
+                severity="error",
+                message=secret,
+                field="key_positive_developments[1].finding",
+            )
+        ],
+    )
+
+    diagnostic = diagnose_integration_failure(PipelineVerificationError(report))
+    payload = diagnostic.model_dump_json()
+
+    assert diagnostic.category == "VERIFICATION_ERROR"
+    assert diagnostic.reason_code == "DETERMINISTIC_VERIFICATION_REJECTED"
+    assert diagnostic.verification_issue_codes == ["UNSUPPORTED_NUMBER"]
+    assert secret not in payload
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("evidence for 'chunk:secret' is not a chunk excerpt", "EVIDENCE_NOT_IN_SOURCE"),
+        ("source_section 'x' does not match source chunk", "SECTION_MISMATCH"),
+        ("unknown evidence source_id: 'x'", "INVALID_SOURCE_ID"),
+        ("unknown outlook source_id: 'x'", "INVALID_OUTLOOK_SOURCE_ID"),
+        (
+            "a known management outlook sentiment requires evidence source_ids",
+            "OUTLOOK_WITHOUT_EVIDENCE",
+        ),
+        ("findings require retrieved evidence", "EMPTY_RETRIEVAL"),
+        (
+            "management outlook must be unknown without retrieved evidence",
+            "EMPTY_RETRIEVAL",
+        ),
+        ("invalid LLM output schema: private", "INVALID_OUTPUT_SCHEMA"),
+    ],
+)
+def test_internal_grounding_diagnostic_uses_stable_safe_reason_codes(
+    message: str,
+    expected: str,
+) -> None:
+    diagnostic = diagnose_integration_failure(GroundedAnalysisError(message))
+
+    assert diagnostic.category == "GROUNDING_ERROR"
+    assert diagnostic.reason_code == expected
+    assert "secret" not in diagnostic.model_dump_json()
 
 
 def test_serialized_errors_never_reflect_secrets_or_internal_messages() -> None:
