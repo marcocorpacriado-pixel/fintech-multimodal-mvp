@@ -34,7 +34,6 @@ from src.visualization.presentation import (  # noqa: E402
     format_display_date,
     format_metric_period,
     human_source_label,
-    normalize_ticker_for_ui,
     select_executive_metrics,
     sort_filings,
     verification_label,
@@ -50,6 +49,38 @@ SENTIMENT_COLORS = {
     "neutral": "gray",
     "unknown": "gray",
 }
+# Tickers offered in real mode; filings for each are discovered live from SEC.
+TICKERS = {
+    "AAPL": "Apple Inc.",
+    "AMZN": "Amazon.com, Inc.",
+    "BAC": "Bank of America Corporation",
+    "GOOGL": "Alphabet Inc.",
+    "GS": "The Goldman Sachs Group, Inc.",
+    "JNJ": "Johnson & Johnson",
+    "JPM": "JPMorgan Chase & Co.",
+    "META": "Meta Platforms, Inc.",
+    "MSFT": "Microsoft Corporation",
+    "NVDA": "NVIDIA Corporation",
+    "TSLA": "Tesla, Inc.",
+    "UNH": "UnitedHealth Group Incorporated",
+}
+# Base tokens live in .streamlit/config.toml; this only covers what the theme can't (DESIGN.md).
+# The status widget is hidden because it cycles informal pictograms; st.spinner gives feedback.
+TERMINAL_CSS = """
+<style>
+[data-testid="stStatusWidget"] { display: none; }
+[data-testid="stMainBlockContainer"] { padding-top: 4rem; padding-bottom: 1.5rem; }
+[data-testid="stMetricLabel"] p {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.04em; color: #94A3B8;
+}
+[data-testid="stMetricValue"] { font-weight: 700; }
+.st-key-report_header {
+    position: sticky; top: 3.75rem; z-index: 99;
+    background: #0B0F19; border-bottom: 1px solid #334155; padding-bottom: 0.5rem;
+}
+</style>
+"""
 
 
 def md_escape(text: str) -> str:
@@ -188,12 +219,6 @@ def _render_filing_selector(
     return selected
 
 
-def _uppercase_ticker_widget() -> None:
-    value = st.session_state.get("ticker_input")
-    if isinstance(value, str):
-        st.session_state.ticker_input = value.strip().upper()
-
-
 def render_sidebar() -> tuple[dict[str, Any] | None, bool]:
     """Render only analysis configuration; audio controls live by the summary."""
 
@@ -208,24 +233,16 @@ def render_sidebar() -> tuple[dict[str, Any] | None, bool]:
         payload: dict[str, Any] | None
         if mode == "Real":
             st.caption("LIVE | SEC filing and configured OpenRouter model")
-            raw_ticker = st.text_input(
+            ticker = st.selectbox(
                 "Ticker",
-                "AAPL",
-                max_chars=15,
-                key="ticker_input",
-                on_change=_uppercase_ticker_widget,
+                list(TICKERS),
+                format_func=lambda t: f"{t} · {TICKERS[t]}",
+                key="ticker_select",
             )
-            ticker = normalize_ticker_for_ui(raw_ticker)
             filing_type = st.selectbox("Filing type", ["10-Q", "10-K"])
-            selected: dict[str, Any] | None = None
-            if ticker is None:
-                st.warning("Enter a valid ticker, for example AAPL, BRK.B, or BRK-B.")
-            else:
-                if ticker != raw_ticker.strip():
-                    st.caption(f"Using normalized ticker: {ticker}")
-                selected = _render_filing_selector(ticker, filing_type)
+            selected = _render_filing_selector(ticker, filing_type)
             payload = None
-            if ticker is not None and selected is not None:
+            if selected is not None:
                 payload = {
                     "ticker": ticker,
                     "filing_date": selected["filing_date"],
@@ -249,38 +266,39 @@ def render_product_header() -> None:
 def render_analysis_header(handoff: dict[str, Any]) -> str:
     meta = handoff["pipeline_metadata"]
     state = verification_label(handoff["verification"])
-    mode_column, verification_column = st.columns([1, 4])
-    with mode_column:
-        if meta["analysis_mode"] == "real":
-            st.badge("LIVE ANALYSIS", color="green")
-        else:
-            st.badge("DEMO | SYNTHETIC", color="orange")
-    with verification_column:
-        state_color = {
-            "VERIFIED": "green",
-            "VERIFIED WITH WARNINGS": "orange",
-            "FAILED VERIFICATION": "red",
-        }[state]
-        st.badge(
-            state,
-            color=state_color,
-        )
+    with st.container(key="report_header"):
+        mode_column, verification_column = st.columns([1, 4])
+        with mode_column:
+            if meta["analysis_mode"] == "real":
+                st.badge("LIVE ANALYSIS", icon=":material/verified:", color="green")
+            else:
+                st.badge("DEMO | SYNTHETIC", icon=":material/science:", color="orange")
+        with verification_column:
+            state_color = {
+                "VERIFIED": "green",
+                "VERIFIED WITH WARNINGS": "orange",
+                "FAILED VERIFICATION": "red",
+            }[state]
+            st.badge(
+                state,
+                color=state_color,
+            )
 
-    company, ticker = st.columns([4, 1], vertical_alignment="bottom")
-    with company:
-        st.header(md_escape(handoff["company"]))
-    with ticker:
-        st.subheader(md_escape(handoff["ticker"]))
+        company, ticker = st.columns([4, 1], vertical_alignment="bottom")
+        with company:
+            st.header(md_escape(handoff["company"]))
+        with ticker:
+            st.subheader(md_escape(handoff["ticker"]))
 
-    facts = [
-        handoff["filing_type"],
-        f"Report period: {format_display_date(handoff['period'])}",
-    ]
-    if meta.get("filing_date"):
-        facts.append(f"Filed: {format_display_date(meta['filing_date'])}")
-    st.caption(" | ".join(facts))
-    if meta["analysis_mode"] == "demo":
-        st.caption("Deterministic synthetic fixture | No SEC or LLM request")
+        facts = [
+            handoff["filing_type"],
+            f"Report period: {format_display_date(handoff['period'])}",
+        ]
+        if meta.get("filing_date"):
+            facts.append(f"Filed: {format_display_date(meta['filing_date'])}")
+        st.caption(" | ".join(facts))
+        if meta["analysis_mode"] == "demo":
+            st.caption("Deterministic synthetic fixture | No SEC or LLM request")
     return state
 
 
@@ -590,7 +608,12 @@ def render_result(handoff: dict[str, Any]) -> None:
         return
 
     overview, financials, narrative, sources = st.tabs(
-        ["Overview", "Financials", "Narrative", "Sources"]
+        [
+            ":material/dashboard: Overview",
+            ":material/monitoring: Financials",
+            ":material/article: Narrative",
+            ":material/verified_user: Sources",
+        ]
     )
     with overview:
         render_executive_snapshot(handoff)
@@ -606,23 +629,13 @@ def render_result(handoff: dict[str, Any]) -> None:
         render_technical_details(handoff)
 
 
-def _hide_native_running_widget() -> None:
-    """Hide Streamlit's header "Running..." widget.
-
-    That built-in widget cycles through informal pictograms (cyclist, swimmer,
-    wheelchair). Loading feedback is given by the neutral ``st.spinner`` blocks.
-    """
-
-    st.html("<style>[data-testid=\"stStatusWidget\"]{display:none;}</style>")
-
-
 def main() -> None:
     st.set_page_config(
         page_title="Financial Intelligence Copilot",
         page_icon=":material/query_stats:",
         layout="wide",
     )
-    _hide_native_running_widget()
+    st.html(TERMINAL_CSS)  # static constant, no user data
     render_product_header()
     payload, run = render_sidebar()
 
