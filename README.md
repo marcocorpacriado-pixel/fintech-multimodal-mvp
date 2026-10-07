@@ -60,16 +60,24 @@ El pipeline entrega inicialmente siete métricas:
 
 | Métrica | Comparación preferida |
 |---|---|
-| Revenue | QoQ, duration quarter-only |
-| Net Income | QoQ, duration quarter-only |
-| Diluted EPS | QoQ, duration quarter-only; nunca se deriva por resta |
-| Cash and Cash Equivalents | QoQ entre valores instant |
-| Total Debt | QoQ entre valores instant consolidados |
+| Revenue | YoY, mismo trimestre del año anterior (duration quarter-only) |
+| Net Income | YoY, mismo trimestre del año anterior (duration quarter-only) |
+| Diluted EPS | YoY, duration quarter-only; nunca se deriva por resta |
+| Cash and Cash Equivalents | YoY entre valores instant |
+| Total Debt | YoY entre valores instant consolidados |
 | Operating Cash Flow | YoY YTD cuando es el contexto comparable seguro |
 | Capital Expenditures | YoY YTD cuando es el contexto comparable seguro |
 
 Estas cifras proceden exclusivamente de la capa determinista XBRL. El LLM no
-las calcula, sustituye ni modifica.
+las calcula, sustituye ni modifica. Las comparaciones son estrictamente
+interanuales: el filing de referencia es el del mismo periodo un año antes
+(nunca el trimestre secuencial) para evitar el sesgo de estacionalidad.
+
+El sentimiento de `management_outlook` lo puntúa FinBERT (`ProsusAI/finbert`,
+vía `transformers`) sobre el resumen grounded, con `confidence` y `model` en el
+handoff. Si el modelo no carga (sin red, sin dependencias) se conserva la
+etiqueta del LLM con `confidence`/`model` a `null`. Un outlook `unknown` sin
+evidencia nunca se reclasifica.
 
 ## Grounding y verificación
 

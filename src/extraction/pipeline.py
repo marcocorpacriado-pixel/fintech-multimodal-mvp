@@ -51,6 +51,7 @@ from .schemas import (
     Sentiment,
     VerificationReport,
 )
+from .sentiment import classify_financial_sentiment
 
 
 logger = logging.getLogger(__name__)
@@ -349,12 +350,14 @@ def analyze_financials(
         for finding in qualitative.key_positive_developments
     ]
     risks = [_to_evidence(finding, catalog) for finding in qualitative.key_risks]
-    outlook = ManagementOutlook(
-        summary=qualitative.management_outlook.summary,
-        sentiment=qualitative.management_outlook.sentiment,
-        source_ids=catalog.source_ids_for(
-            qualitative.management_outlook.evidence_ids
-        ),
+    outlook = _classify_outlook(
+        ManagementOutlook(
+            summary=qualitative.management_outlook.summary,
+            sentiment=qualitative.management_outlook.sentiment,
+            source_ids=catalog.source_ids_for(
+                qualitative.management_outlook.evidence_ids
+            ),
+        )
     )
     result = FinancialAnalysisResult(
         company=company,
@@ -909,6 +912,20 @@ def _validate_grounding(
             )
     if problems:
         raise ModelOutputRejectedError(problems)
+
+
+def _classify_outlook(outlook: ManagementOutlook) -> ManagementOutlook:
+    """Let FinBERT score grounded outlook sentiment; keep the LLM label on failure.
+
+    An ``unknown`` outlook has no cited evidence, so it is never reclassified.
+    """
+
+    if outlook.sentiment == "unknown" or not outlook.source_ids:
+        return outlook
+    scored = classify_financial_sentiment(outlook.summary)
+    if scored is None:
+        return outlook
+    return outlook.model_copy(update=dict(scored))
 
 
 def _to_evidence(finding: _GroundedFinding, catalog: EvidenceCatalog) -> Evidence:

@@ -53,9 +53,9 @@ Reduced JSON shape:
       "previous_value": 111184000000.0,
       "change_pct": -1.5892574471,
       "unit": "usd",
-      "comparison_type": "QoQ",
+      "comparison_type": "YoY",
       "current_period": "2026-03-29/2026-06-27",
-      "previous_period": "2025-12-28/2026-03-28",
+      "previous_period": "2025-03-30/2025-06-28",
       "source_ids": ["xbrl:current", "xbrl:previous"]
     }
   ],
@@ -72,6 +72,8 @@ Reduced JSON shape:
   "management_outlook": {
     "summary": "Insufficient evidence for explicit guidance.",
     "sentiment": "unknown",
+    "confidence": null,
+    "model": null,
     "source_ids": []
   },
   "executive_summary": "...",

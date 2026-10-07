@@ -681,17 +681,16 @@ def _select_comparison(
     if not compatible:
         return None, None
 
-    priority = {"QoQ": 0, "YoY": 1, "YoY_YTD": 2}
+    priority = {"YoY": 0, "YoY_YTD": 1}
 
     def candidate_key(
         item: tuple[_SelectedValue, ComparisonType],
     ) -> tuple[Any, ...]:
         candidate, comparison_type = item
         day_gap = (current.terminal_date - candidate.terminal_date).days
-        target_gap = 91 if comparison_type == "QoQ" else 365
         return (
             priority[comparison_type],
-            abs(day_gap - target_gap),
+            abs(day_gap - 365),
             -candidate.terminal_date.toordinal(),
             _value_tie_key(candidate),
         )
@@ -710,13 +709,10 @@ def _comparison_type(
     if previous.terminal_date >= current.terminal_date:
         return None
 
+    # Strictly year-over-year: sequential quarters are seasonally biased.
     day_gap = (current.terminal_date - previous.terminal_date).days
     if current.period_type == "instant":
-        if 70 <= day_gap <= 110:
-            return "QoQ"
-        if 340 <= day_gap <= 380:
-            return "YoY"
-        return None
+        return "YoY" if 340 <= day_gap <= 380 else None
 
     current_class = _duration_class(current)
     previous_class = _duration_class(previous)
@@ -729,40 +725,11 @@ def _comparison_type(
         return None
 
     if current_class == "quarter":
-        if _is_adjacent_quarter(current, previous):
-            return "QoQ"
-        if _is_year_over_year(current, previous):
-            return "YoY"
-        return None
+        return "YoY" if _is_year_over_year(current, previous) else None
 
     if _is_year_over_year(current, previous):
         return "YoY" if current_class == "annual" else "YoY_YTD"
     return None
-
-
-def _is_adjacent_quarter(
-    current: _SelectedValue,
-    previous: _SelectedValue,
-) -> bool:
-    if current.period_start is None or previous.period_end is None:
-        return False
-    start_gap = (current.period_start - previous.period_end).days
-    if not 1 <= start_gap <= 14:
-        return False
-    if current.fiscal_period and previous.fiscal_period:
-        quarter_numbers = {f"Q{number}": number for number in range(1, 5)}
-        current_quarter = quarter_numbers.get(current.fiscal_period)
-        previous_quarter = quarter_numbers.get(previous.fiscal_period)
-        if current_quarter is None or previous_quarter is None:
-            return False
-        if current_quarter == previous_quarter + 1:
-            return current.fiscal_year == previous.fiscal_year
-        if current_quarter == 1 and previous_quarter == 4:
-            if current.fiscal_year is None or previous.fiscal_year is None:
-                return True
-            return current.fiscal_year == previous.fiscal_year + 1
-        return False
-    return True
 
 
 def _is_year_over_year(
