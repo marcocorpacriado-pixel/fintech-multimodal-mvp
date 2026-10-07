@@ -33,6 +33,7 @@ from src.visualization.presentation import (  # noqa: E402
     filing_option_label,
     format_display_date,
     format_metric_period,
+    highlight_tokens_html,
     human_source_label,
     select_executive_metrics,
     sentiment_label,
@@ -465,6 +466,18 @@ def render_outlook(outlook: dict[str, Any]) -> None:
                 f"> 📌 **Key evidence detected{score_text}:** "
                 f"\"{md_escape(outlook['rationale_sentence'])}\""
             )
+            if outlook.get("token_attributions"):
+                st.html(
+                    highlight_tokens_html(
+                        outlook["rationale_sentence"],
+                        outlook["token_attributions"],
+                        outlook["sentiment"],
+                    )
+                )
+                st.caption(
+                    "Keywords behind FinBERT's classification "
+                    "(Integrated Gradients · Input × Gradient attribution)"
+                )
         st.markdown(md_escape(outlook["summary"]))
 
 

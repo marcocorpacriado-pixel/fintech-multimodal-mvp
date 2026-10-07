@@ -108,6 +108,7 @@ def test_demo_analysis_renders_professional_dashboard():
     assert "VERIFIED WITH WARNINGS" in text
     assert "POSITIVE · 94.2% confidence · FinBERT" in text
     assert "Key evidence detected (94.6%)" in text
+    assert "Keywords behind FinBERT's classification" in text
     assert len(at.metric) == 11  # 4-metric snapshot plus the 7-metric financial grid
     assert at.metric[0].value == "$1.25B"
     assert "N/A" in text

@@ -76,6 +76,7 @@ Reduced JSON shape:
     "model": null,
     "rationale_sentence": null,
     "rationale_score": null,
+    "token_attributions": [],
     "source_ids": []
   },
   "executive_summary": "...",

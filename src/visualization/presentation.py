@@ -6,6 +6,7 @@ recalculate financial values.
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -13,6 +14,13 @@ from typing import Any, Literal, Mapping, Sequence
 
 
 _TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,14}$")
+_WORD_RE = re.compile(r"(\w+)")
+# DESIGN.md tokens: positive-growth, error red, accent-blue.
+_HEATMAP_RGB = {
+    "positive": (16, 185, 129),
+    "negative": (239, 68, 68),
+    "neutral": (56, 189, 248),
+}
 _SNAPSHOT_METRICS = (
     "Revenue",
     "Net Income",
@@ -194,6 +202,39 @@ def sentiment_label(outlook: Mapping[str, Any]) -> str:
     return f"{label} · {confidence * 100:.1f}% confidence · {model_name}"
 
 
+def highlight_tokens_html(
+    sentence: str,
+    attributions: Sequence[Mapping[str, Any]],
+    sentiment: str,
+) -> str:
+    """Escaped HTML of ``sentence`` with attributed words shaded by score.
+
+    Attributions come from an uncased tokenizer, so words match case-insensitively.
+    Every piece of filing text is HTML-escaped; only the spans are markup.
+    """
+
+    scores: dict[str, float] = {}
+    for item in attributions:
+        token = str(item.get("token") or "").lower()
+        score = float(item.get("score") or 0.0)
+        scores[token] = max(score, scores.get(token, 0.0))
+    red, green, blue = _HEATMAP_RGB.get(sentiment, (148, 163, 184))
+
+    parts = []
+    for index, piece in enumerate(_WORD_RE.split(sentence)):
+        text = html.escape(piece)
+        score = scores.get(piece.lower(), 0.0) if index % 2 else 0.0
+        if score > 0:
+            parts.append(
+                f'<span title="{score:.2f}" style="background-color: '
+                f"rgba({red}, {green}, {blue}, {score * 0.4:.2f}); "
+                f'border-radius: 4px; padding: 0 2px;">{text}</span>'
+            )
+        else:
+            parts.append(text)
+    return f'<p style="line-height: 1.9; margin: 0;">{"".join(parts)}</p>'
+
+
 def human_source_label(filing_type: str, source_section: str | None) -> str:
     """Present a canonical SEC section before its technical identifier."""
 
@@ -208,6 +249,7 @@ __all__ = [
     "filing_option_label",
     "format_display_date",
     "format_metric_period",
+    "highlight_tokens_html",
     "human_source_label",
     "normalize_ticker_for_ui",
     "select_executive_metrics",

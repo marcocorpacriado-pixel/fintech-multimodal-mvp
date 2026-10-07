@@ -11,6 +11,7 @@ from src.visualization.presentation import (
     error_presentation,
     filing_option_label,
     format_metric_period,
+    highlight_tokens_html,
     human_source_label,
     normalize_ticker_for_ui,
     select_executive_metrics,
@@ -226,3 +227,22 @@ def test_human_source_labels_prioritize_readable_provenance():
 )
 def test_sentiment_label_shows_model_confidence_only_when_scored(outlook, expected):
     assert sentiment_label(outlook) == expected
+
+
+def test_token_heatmap_shades_attributed_words_and_escapes_filing_text():
+    html = highlight_tokens_html(
+        "Continued Demand <script>x</script> grew.",
+        [{"token": "demand", "score": 1.0}, {"token": "continued", "score": 0.5}],
+        "positive",
+    )
+
+    assert "rgba(16, 185, 129, 0.40)" in html and ">Demand</span>" in html
+    assert "rgba(16, 185, 129, 0.20)" in html and ">Continued</span>" in html
+    assert "<script>" not in html and "&lt;script&gt;" in html
+    assert html.count("<span") == 2
+
+
+def test_token_heatmap_uses_red_for_negative_sentiment():
+    html = highlight_tokens_html("Demand fell.", [{"token": "fell", "score": 0.5}], "negative")
+
+    assert "rgba(239, 68, 68, 0.20)" in html

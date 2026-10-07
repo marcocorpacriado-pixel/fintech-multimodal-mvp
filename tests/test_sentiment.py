@@ -1,5 +1,7 @@
 """FinBERT outlook sentiment, with the Hugging Face pipeline mocked (no downloads)."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from src.extraction import pipeline, sentiment
@@ -190,3 +192,114 @@ def test_ungrounded_outlook_is_never_reclassified(monkeypatch, outlook):
     monkeypatch.setattr(pipeline, "classify_financial_sentiment", pytest.fail)
 
     assert pipeline._classify_outlook(outlook) == outlook
+
+
+def _tiny_finbert(tmp_path):
+    """Random-weight BERT with FinBERT's label map: real gradients, no download."""
+
+    torch = pytest.importorskip("torch")
+    transformers = pytest.importorskip("transformers")
+    BertConfig = transformers.BertConfig
+    BertForSequenceClassification = transformers.BertForSequenceClassification
+    BertTokenizer = transformers.BertTokenizer
+
+    vocab = tmp_path / "vocab.txt"
+    vocab.write_text(
+        "\n".join(
+            ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]", "sales", "increas", "##ed", "demand", "."]
+        ),
+        encoding="utf-8",
+    )
+    torch.manual_seed(0)
+    config = BertConfig(
+        vocab_size=10,
+        hidden_size=8,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        intermediate_size=16,
+        num_labels=3,
+        label2id={"positive": 0, "negative": 1, "neutral": 2},
+        id2label={0: "positive", 1: "negative", 2: "neutral"},
+    )
+    model = BertForSequenceClassification(config).eval()
+    return SimpleNamespace(model=model, tokenizer=BertTokenizer(str(vocab)))
+
+
+@pytest.mark.parametrize("target", ["positive", "negative", "neutral", None])
+def test_token_attributions_merge_wordpieces_and_normalize(monkeypatch, tmp_path, target):
+    tiny = _tiny_finbert(tmp_path)
+    monkeypatch.setattr(sentiment, "_classifier", lambda: tiny)
+
+    attributions = sentiment.explain_sentiment_tokens(
+        "Sales increased demand.", target, steps=4
+    )
+
+    assert attributions, "some word must support the target logit"
+    tokens = [item["token"] for item in attributions]
+    assert set(tokens) <= {"sales", "increased", "demand"}  # no [CLS]/[SEP]/##/"."
+    scores = [item["score"] for item in attributions]
+    assert scores == sorted(scores, reverse=True)
+    assert scores[0] == 1.0 and all(0.0 < score <= 1.0 for score in scores)
+    assert all(param.grad is None for param in tiny.model.parameters())
+
+
+def test_wordpieces_are_summed_and_special_tokens_dropped():
+    words = sentiment._merge_wordpieces(
+        ["[CLS]", "increas", "##ed", "demand", ".", "[SEP]"],
+        [9.0, 0.5, 0.25, 0.3, 0.2, 9.0],
+        ["[CLS]", "[SEP]", "[PAD]"],
+    )
+
+    assert words == [("increased", 0.75), ("demand", 0.3), (".", 0.2)]
+
+
+def test_normalization_keeps_supporting_words_scaled_to_max():
+    assert sentiment._normalize_words(
+        [("increased", 0.8), ("demand", 0.2), ("risk", -0.5), (".", 0.9)]
+    ) == [{"token": "increased", "score": 1.0}, {"token": "demand", "score": 0.25}]
+    assert sentiment._normalize_words([("risk", -0.5)]) == []
+
+
+def test_token_attribution_falls_back_to_empty_list(monkeypatch):
+    def offline():
+        raise OSError("no network")
+
+    monkeypatch.setattr(sentiment, "_classifier", offline)
+
+    assert sentiment.explain_sentiment_tokens("Demand grew.", "positive") == []
+    monkeypatch.setattr(sentiment, "_classifier", pytest.fail)
+    assert sentiment.explain_sentiment_tokens("  ") == []
+
+
+def test_pipeline_attaches_attributions_for_rationale_sentence(monkeypatch):
+    explain_calls = []
+    monkeypatch.setattr(
+        pipeline,
+        "classify_financial_sentiment",
+        lambda text: {"sentiment": "positive", "confidence": 0.9, "model": "ProsusAI/finbert"},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "extract_sentiment_rationale",
+        lambda text, target_sentiment: {
+            "rationale_sentence": "Demand grew.",
+            "rationale_score": 0.95,
+        },
+    )
+
+    def explain(text, target_sentiment=None):
+        explain_calls.append((text, target_sentiment))
+        return [{"token": "demand", "score": 1.0}]
+
+    monkeypatch.setattr(pipeline, "explain_sentiment_tokens", explain)
+
+    outlook = pipeline._classify_outlook(_outlook("positive"), evidence_text="Demand grew.")
+
+    assert explain_calls == [("Demand grew.", "positive")]
+    assert [item.model_dump() for item in outlook.token_attributions] == [
+        {"token": "demand", "score": 1.0}
+    ]
+
+
+def test_conftest_disables_token_attribution():
+    assert pipeline.explain_sentiment_tokens("Demand grew.", "positive") == []

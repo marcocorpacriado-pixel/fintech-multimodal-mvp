@@ -79,7 +79,10 @@ handoff. Si el modelo no carga (sin red, sin dependencias) se conserva la
 etiqueta del LLM con `confidence`/`model` a `null`. Un outlook `unknown` sin
 evidencia nunca se reclasifica. `rationale_sentence`/`rationale_score` recogen
 la oración literal del filing citado (de los `source_ids` del outlook) que
-FinBERT puntúa más alto para esa polaridad.
+FinBERT puntúa más alto para esa polaridad. `token_attributions` lista las
+palabras de esa oración que sostienen la clase (Integrated Gradients sobre los
+word embeddings, 32 pasos; `steps=1` equivale a Input × Gradient), normalizadas
+a `(0, 1]` y mostradas como heatmap en la tarjeta del outlook.
 
 ## Grounding y verificación
 
