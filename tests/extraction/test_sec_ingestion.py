@@ -17,10 +17,14 @@ from src.extraction.pipeline import run_analysis_pipeline
 from src.extraction.sec_ingestion import (
     SECIdentityError,
     SECIngestionError,
+    SECInputError,
     SECFilingNotFoundError,
     SECNarrativeExtractionError,
     SECPreviousFilingNotFoundError,
+    SECServiceError,
     SECXBRLUnavailableError,
+    discover_sec_filings,
+    normalize_sec_ticker,
     prepare_sec_analysis_inputs,
 )
 
@@ -178,7 +182,7 @@ class FakeLLMClient:
             "management_outlook": {
                 "summary": "Insufficient separately cited outlook evidence.",
                 "sentiment": "unknown",
-                "source_ids": [],
+                "evidence_ids": [],
             },
             "executive_summary": SUMMARY,
         }
@@ -328,6 +332,79 @@ def test_ticker_is_normalized_and_validated(tmp_path: Path) -> None:
 
     assert result.ticker == "AAPL"
     assert factory.calls == ["AAPL"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("AAPL", "AAPL"),
+        (" msft ", "MSFT"),
+        ("BRK.B", "BRK.B"),
+        ("brk-b", "BRK-B"),
+    ],
+)
+def test_public_ticker_normalizer_accepts_supported_sec_symbols(
+    raw: str,
+    expected: str,
+) -> None:
+    assert normalize_sec_ticker(raw) == expected
+
+
+@pytest.mark.parametrize("ticker", ["", "   ", "@@@", "AAPL$", "AAPL INC", "A" * 16])
+def test_public_ticker_normalizer_rejects_invalid_values(ticker: str) -> None:
+    with pytest.raises(SECInputError, match="invalid ticker"):
+        normalize_sec_ticker(ticker)
+
+
+def test_discovery_returns_latest_distinct_report_periods_without_loading_data() -> None:
+    original = previous_filing()
+    amendment = previous_filing(
+        accession_no="0000320193-26-000014",
+        form="10-Q/A",
+        filing_date=date(2026, 5, 5),
+    )
+    company = company_with(original, amendment)
+    factory = FakeCompanyFactory(company)
+
+    values = discover_sec_filings(
+        ticker="aapl",
+        form="10-Q",
+        limit=2,
+        company_factory=factory,
+    )
+
+    assert [value.accession for value in values] == [
+        CURRENT_ACCESSION,
+        "0000320193-26-000014",
+    ]
+    assert values[0].filing_date == date(2026, 7, 31)
+    assert values[0].report_date == date(2026, 6, 27)
+    assert all(filing.text_calls == 0 for filing in company.filings)
+    assert all(filing.xbrl_calls == 0 for filing in company.filings)
+
+
+def test_discovery_empty_result_is_not_an_error() -> None:
+    company = FakeCompany([])
+
+    values = discover_sec_filings(
+        ticker="AAPL",
+        form="10-Q",
+        company_factory=FakeCompanyFactory(company),
+    )
+
+    assert values == []
+
+
+def test_discovery_wraps_provider_connection_failures() -> None:
+    def failing_factory(_: str):
+        raise ConnectionError("SEC unavailable")
+
+    with pytest.raises(SECServiceError, match="discovery failed"):
+        discover_sec_filings(
+            ticker="AAPL",
+            form="10-Q",
+            company_factory=failing_factory,
+        )
 
 
 def test_selected_filing_has_requested_form(tmp_path: Path) -> None:
@@ -560,6 +637,8 @@ def test_runtime_metadata_is_coherent(tmp_path: Path) -> None:
     result, _, _ = prepare(tmp_path)
 
     assert result.company == "Apple Inc."
+    assert result.filing_date == date(2026, 7, 31)
+    assert result.report_period == "2026-06-27"
     assert result.period == "2026-06-27"
     assert result.current_accession == result.current_filing.accession_no
     assert result.previous_accession == result.previous_filing.accession_no

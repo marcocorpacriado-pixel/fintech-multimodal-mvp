@@ -20,6 +20,8 @@ HTTP endpoint, model invocation, or financial calculation.
 Use the adapter only after `run_analysis_pipeline` returns successfully:
 
 ```python
+from datetime import date
+
 from src.integration import build_analysis_handoff
 
 handoff = build_analysis_handoff(
@@ -27,6 +29,7 @@ handoff = build_analysis_handoff(
     analysis_mode="real",
     provider="openrouter",
     model="deepseek/deepseek-v4-flash",
+    filing_date=date(2026, 7, 31),
 )
 payload = handoff.model_dump(mode="json")
 ```
@@ -80,17 +83,41 @@ Reduced JSON shape:
     "analysis_mode": "real",
     "provider": "openrouter",
     "model": "deepseek/deepseek-v4-flash",
+    "filing_date": "2026-07-31",
     "effective_queries": ["revenue operating performance"],
     "retrieval_count": 1,
-    "retrieved_source_ids": ["sec-filing:chunk-id"]
+    "retrieved_source_ids": ["sec-filing:chunk-id"],
+    "generation_attempts": 1,
+    "repair_used": false,
+    "first_failure_category": null
   }
 }
 ```
+
+`generation_attempts` (1 or 2), `repair_used` and `first_failure_category`
+(`GROUNDING_ERROR` or `VERIFICATION_ERROR`, only when a repair ran) are safe
+observability metadata. They never contain model output, prompts or evidence.
+
+### Grounded generation contract (R12.2)
+
+The backend builds a deterministic evidence catalog (`E01`, `E02`, ...) from the
+retrieved chunks. Each entry is a literal, offset-traceable slice of a chunk.
+The model returns only `{finding, evidence_id}` per positive/risk and
+`evidence_ids` for the outlook. `source_id`, `source_section` and the quoted
+`evidence` above are rebuilt from the catalog, never copied from model output.
+After a grounding or verifier rejection of a *generated* output, exactly one
+repair generation is allowed (never for SEC, input, provider or empty-retrieval
+failures). A failed repair blocks the analysis; no rule is relaxed.
 
 Marco may build metric cards and charts directly from `financial_metrics`.
 `change_pct`, period comparability, units, and `comparison_type` are canonical
 D5C output and must not be recalculated. The UI must not query XBRL, run BM25,
 interpret source identifiers, parse filings, or call the LLM.
+
+`pipeline_metadata.filing_date` is the SEC submission date selected by the
+request. Top-level `period` is the financial report period; consumers must not
+treat them as interchangeable. A selector can load lightweight metadata from
+`GET /api/v1/filings/{ticker}` before submitting the analysis request.
 
 Verification warnings can be displayed without blocking the response.
 Pipeline verification errors are raised before a handoff is returned.
@@ -149,12 +176,13 @@ Stable categories are:
 
 | Code | Typical source | Retryable policy |
 |---|---|---|
-| `INPUT_ERROR` | invalid path or pipeline input | no |
-| `SEC_INGESTION_ERROR` | SEC preparation | only generic/transient service failures |
+| `INPUT_ERROR` | invalid request, ticker, path or pipeline input | no (HTTP 422) |
+| `FILING_NOT_FOUND` | target or comparable SEC filing absent | no (HTTP 404) |
+| `SEC_INGESTION_ERROR` | SEC service/configuration/data preparation | transient service failures only (HTTP 503) |
 | `ANALYSIS_ERROR` | XBRL normalization/metric or analysis failure | no |
 | `LLM_PROVIDER_ERROR` | provider transport/response | yes, except configuration |
-| `GROUNDING_ERROR` | invalid citation/evidence | no |
-| `VERIFICATION_ERROR` | deterministic verifier rejection | no |
+| `GROUNDING_ERROR` | invalid evidence selection after the bounded repair | yes, explicit user retry (not for empty retrieval) |
+| `VERIFICATION_ERROR` | deterministic verifier rejection after the bounded repair | yes, explicit user retry |
 | `UNKNOWN_ERROR` | unclassified failure | no |
 
 Messages are fixed by category. They never reflect provider response bodies,

@@ -789,6 +789,34 @@ def test_evidence_present_in_chunk_is_accepted() -> None:
     assert "EVIDENCE_NOT_IN_SOURCE" not in codes(verify())
 
 
+def test_evidence_rendering_whitespace_is_accepted() -> None:
+    finding = Evidence(
+        finding="Whitespace-normalized evidence.",
+        evidence="Services   demand\nremained\tresilient during the quarter.",
+        source_section="ITEM_7",
+        source_id="chunk-positive",
+        source_type="filing",
+    )
+
+    assert "EVIDENCE_NOT_IN_SOURCE" not in codes(
+        verify(valid_analysis(positives=[finding]))
+    )
+
+
+def test_evidence_case_change_is_rejected() -> None:
+    finding = Evidence(
+        finding="Case-modified evidence.",
+        evidence=POSITIVE_TEXT.lower(),
+        source_section="ITEM_7",
+        source_id="chunk-positive",
+        source_type="filing",
+    )
+
+    assert "EVIDENCE_NOT_IN_SOURCE" in codes(
+        verify(valid_analysis(positives=[finding]))
+    )
+
+
 def test_invented_evidence_is_rejected() -> None:
     finding = Evidence(
         finding="Invented evidence.",

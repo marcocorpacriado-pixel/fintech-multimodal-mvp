@@ -1,7 +1,8 @@
-"""Streamlit dashboard. Talks to the FastAPI backend over HTTP only.
+"""Institutional Streamlit presentation for the FastAPI analysis contract.
 
-Never import src.extraction, src.integration or src.audio here: every value
-shown comes from the API's AnalysisHandoff JSON, rendered without recalculation.
+The UI communicates with FastAPI over HTTP only. It never imports extraction,
+integration, SEC, XBRL, LLM, or audio implementation modules, and it never
+recalculates financial metrics.
 """
 
 from __future__ import annotations
@@ -9,7 +10,9 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pandas as pd
@@ -22,12 +25,24 @@ from src.visualization.financial_charts import (  # noqa: E402
     NOT_AVAILABLE,
     format_change_pct,
     format_value,
+    render_metrics_change_chart,
     render_metrics_comparison_chart,
 )
+from src.visualization.presentation import (  # noqa: E402
+    error_presentation,
+    filing_option_label,
+    format_display_date,
+    format_metric_period,
+    human_source_label,
+    normalize_ticker_for_ui,
+    select_executive_metrics,
+    sort_filings,
+    verification_label,
+)
+
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 DEFAULT_VOICES = ["af_heart"]
-DEMO_PAYLOAD = {"ticker": "DEMO", "period": "demo", "mode": "demo"}
 SENTIMENT_COLORS = {
     "positive": "green",
     "negative": "red",
@@ -35,57 +50,55 @@ SENTIMENT_COLORS = {
     "neutral": "gray",
     "unknown": "gray",
 }
-# Base tokens live in .streamlit/config.toml; this only covers what the theme can't (DESIGN.md).
-TERMINAL_CSS = """
-<style>
-[data-testid="stMainBlockContainer"] { padding-top: 4rem; padding-bottom: 1.5rem; }
-[data-testid="stMetricLabel"] p {
-    font-size: 12px; font-weight: 600; text-transform: uppercase;
-    letter-spacing: 0.04em; color: #94A3B8;
-}
-[data-testid="stMetricValue"] { font-weight: 700; }
-.st-key-report_header {
-    position: sticky; top: 3.75rem; z-index: 99;
-    background: #0B0F19; border-bottom: 1px solid #334155; padding-bottom: 0.5rem;
-}
-.st-key-report_header h1 { padding: 0.25rem 0 0; }
-</style>
-"""
 
 
 def md_escape(text: str) -> str:
-    """Filing text is untrusted: stop `$`, `*`, `#`... from becoming markdown/LaTeX."""
+    """Prevent untrusted filing text from becoming Markdown or LaTeX."""
 
-    return re.sub(r"([\\`*_{}\[\]()#+\-.!|>~$<])", r"\\\1", text)
+    return re.sub(r"([\\`*_{}\[\]()#+\-.!|>~$<])", r"\\\1", str(text))
 
 
-def show_api_error(response: httpx.Response) -> None:
+def parse_api_error(response: httpx.Response) -> dict[str, Any]:
+    """Convert an API failure into the small safe shape needed by the UI."""
+
     try:
         detail = response.json().get("detail")
-    except ValueError:
+    except (ValueError, AttributeError):
         detail = None
-    if isinstance(detail, dict) and "code" in detail:
-        st.error(f"**{detail['code']}** — {md_escape(detail['message'])}")
-        if detail.get("retryable"):
-            st.caption("Error transitorio: puedes volver a intentarlo.")
-    elif response.status_code == 422:
-        st.error("La petición no es válida. Revisa los datos introducidos.")
-    else:
-        st.error(f"Error inesperado de la API (HTTP {response.status_code}).")
+    if isinstance(detail, dict) and isinstance(detail.get("code"), str):
+        return {
+            "code": detail["code"],
+            "message": str(detail.get("message") or ""),
+            "retryable": bool(detail.get("retryable")),
+            "status_code": response.status_code,
+        }
+    return {
+        "code": "INPUT_ERROR" if response.status_code == 422 else "UNKNOWN_ERROR",
+        "message": "",
+        "retryable": response.status_code >= 500,
+        "status_code": response.status_code,
+    }
 
 
-def api_request(method: str, path: str, **kwargs) -> httpx.Response | None:
-    """One HTTP call to the API; renders a clean error and returns None on failure."""
+def api_request(
+    method: str,
+    path: str,
+    **kwargs: Any,
+) -> tuple[httpx.Response | None, dict[str, Any] | None]:
+    """Make one backend request and return data or a safe presentation error."""
 
     try:
         response = httpx.request(method, f"{API_URL}{path}", **kwargs)
     except httpx.HTTPError:
-        st.error(f"No se pudo conectar con la API en {API_URL}. ¿Está arrancada?")
-        return None
+        return None, {
+            "code": "API_UNAVAILABLE",
+            "message": "",
+            "retryable": True,
+            "status_code": None,
+        }
     if response.is_success:
-        return response
-    show_api_error(response)
-    return None
+        return response, None
+    return None, parse_api_error(response)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -97,166 +110,358 @@ def fetch_voices() -> list[str]:
         return DEFAULT_VOICES
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def _fetch_catalog() -> list[dict]:
-    response = httpx.request("GET", f"{API_URL}/api/v1/filings/catalog", timeout=10)
-    response.raise_for_status()
-    return response.json()["companies"]
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_filings(
+    ticker: str,
+    filing_type: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Fetch lightweight filing metadata; this never runs XBRL or an LLM."""
 
-
-def fetch_catalog() -> list[dict]:
-    """SEC-verified tickers/filings; empty on failure (exceptions are not cached)."""
-
+    response, error = api_request(
+        "GET",
+        f"/api/v1/filings/{ticker}",
+        params={"filing_type": filing_type, "limit": 10},
+        timeout=45,
+    )
+    if response is None:
+        return [], error
     try:
-        return _fetch_catalog()
-    except (httpx.HTTPError, ValueError, KeyError):
-        return []
+        payload = response.json()
+    except ValueError:
+        return [], {
+            "code": "UNKNOWN_ERROR",
+            "message": "",
+            "retryable": True,
+            "status_code": response.status_code,
+        }
+    if not isinstance(payload, list):
+        return [], {
+            "code": "UNKNOWN_ERROR",
+            "message": "",
+            "retryable": True,
+            "status_code": response.status_code,
+        }
+    return sort_filings(payload), None
 
 
-def render_sidebar() -> tuple[dict | None, bool]:
+def render_error(error: dict[str, Any], *, allow_retry: bool = True) -> bool:
+    """Render safe error guidance and return whether retry was requested."""
+
+    code = str(error.get("code") or "UNKNOWN_ERROR")
+    copy = error_presentation(code)
+    st.error(f"{copy.title} ({code})")
+    st.caption(copy.guidance)
+    if error.get("retryable") and allow_retry:
+        st.info("The selected configuration is preserved. Retry when ready.")
+        return st.button("Retry analysis", type="primary", key="retry_analysis")
+    return False
+
+
+def _render_filing_selector(
+    ticker: str,
+    filing_type: str,
+) -> dict[str, Any] | None:
+    with st.spinner("Loading available SEC filings"):
+        filings, error = fetch_filings(ticker, filing_type)
+    if error is not None:
+        copy = error_presentation(str(error.get("code") or "UNKNOWN_ERROR"))
+        st.error(copy.title)
+        st.caption(copy.guidance)
+        if error.get("retryable") and st.button(
+            "Retry filing lookup", key="retry_filings"
+        ):
+            fetch_filings.clear()
+            st.rerun()
+        return None
+    if not filings:
+        st.info("No filings were found for this ticker and filing type.")
+        return None
+
+    labels = [filing_option_label(filing) for filing in filings]
+    selected_label = st.selectbox(
+        "SEC filing",
+        labels,
+        help="Newest filings appear first.",
+    )
+    selected = filings[labels.index(selected_label)]
+    st.caption(f"Accession {selected['accession']}")
+    return selected
+
+
+def _uppercase_ticker_widget() -> None:
+    value = st.session_state.get("ticker_input")
+    if isinstance(value, str):
+        st.session_state.ticker_input = value.strip().upper()
+
+
+def render_sidebar() -> tuple[dict[str, Any] | None, bool]:
+    """Render only analysis configuration; audio controls live by the summary."""
+
     with st.sidebar:
-        st.header("Análisis")
-        mode = st.radio("Modo", ["demo", "real"], horizontal=True)
-        payload: dict | None
-        if mode == "real":
-            payload = None
-            companies = fetch_catalog()
-            if not companies:
-                st.warning("No se pudo cargar el catálogo de filings de la API.")
-            else:
-                company = st.selectbox(
-                    "Ticker", companies, format_func=lambda c: f"{c['ticker']} · {c['company']}"
-                )
-                filing_type = st.selectbox("Filing Type", ["10-Q", "10-K"])
-                filing = st.selectbox(
-                    "Filing",
-                    company["filings"].get(filing_type, []),
-                    format_func=lambda f: (
-                        f"{f['filing_date']} · {f['period']} (cierre {f['period_end']})"
-                    ),
-                )
-                if filing:
-                    payload = {
-                        "ticker": company["ticker"],
-                        "period": filing["filing_date"],
-                        "filing_type": filing_type,
-                        "mode": "real",
-                    }
-        else:
-            st.info(
-                "Modo demo: la API devuelve un fixture sintético (Demo Corp). "
-                "No se consulta la SEC ni ningún LLM."
+        st.header("Analysis configuration")
+        mode = st.radio(
+            "Data mode",
+            ["Demo", "Real"],
+            horizontal=True,
+            help="Demo uses a fixture; Real contacts SEC and the configured provider.",
+        )
+        payload: dict[str, Any] | None
+        if mode == "Real":
+            st.caption("LIVE | SEC filing and configured OpenRouter model")
+            raw_ticker = st.text_input(
+                "Ticker",
+                "AAPL",
+                max_chars=15,
+                key="ticker_input",
+                on_change=_uppercase_ticker_widget,
             )
-            payload = DEMO_PAYLOAD
+            ticker = normalize_ticker_for_ui(raw_ticker)
+            filing_type = st.selectbox("Filing type", ["10-Q", "10-K"])
+            selected: dict[str, Any] | None = None
+            if ticker is None:
+                st.warning("Enter a valid ticker, for example AAPL, BRK.B, or BRK-B.")
+            else:
+                if ticker != raw_ticker.strip():
+                    st.caption(f"Using normalized ticker: {ticker}")
+                selected = _render_filing_selector(ticker, filing_type)
+            payload = None
+            if ticker is not None and selected is not None:
+                payload = {
+                    "ticker": ticker,
+                    "filing_date": selected["filing_date"],
+                    "filing_type": selected["form"],
+                    "mode": "real",
+                }
+        else:
+            st.badge("DEMO | SYNTHETIC", color="orange")
+            st.caption("Deterministic fixture | No SEC or LLM request")
+            payload = {"ticker": "DEMO", "mode": "demo"}
 
-        run = st.button("Ejecutar Análisis", type="primary", width="stretch")
+        run = st.button("Analyze filing", type="primary", width="stretch")
     return payload, run
 
 
-def render_header(handoff: dict) -> None:
+def render_product_header() -> None:
+    st.title("Financial Intelligence Copilot")
+    st.caption("SEC filings | Grounded AI | Deterministic verification")
+
+
+def render_analysis_header(handoff: dict[str, Any]) -> str:
     meta = handoff["pipeline_metadata"]
-    with st.container(key="report_header"):
+    state = verification_label(handoff["verification"])
+    mode_column, verification_column = st.columns([1, 4])
+    with mode_column:
         if meta["analysis_mode"] == "real":
-            st.badge("REAL MODE", icon=":material/verified:", color="green")
+            st.badge("LIVE ANALYSIS", color="green")
         else:
-            st.badge("DEMO MODE (SYNTHETIC DATA)", icon=":material/science:", color="orange")
-        st.title(f"{md_escape(handoff['company'])} ({handoff['ticker']})")
-        st.caption(f"{handoff['filing_type']} · Periodo {handoff['period']}")
-    if meta["analysis_mode"] != "real":
-        st.warning("Datos sintéticos de demostración: no describen ninguna empresa real.")
+            st.badge("DEMO | SYNTHETIC", color="orange")
+    with verification_column:
+        state_color = {
+            "VERIFIED": "green",
+            "VERIFIED WITH WARNINGS": "orange",
+            "FAILED VERIFICATION": "red",
+        }[state]
+        st.badge(
+            state,
+            color=state_color,
+        )
+
+    company, ticker = st.columns([4, 1], vertical_alignment="bottom")
+    with company:
+        st.header(md_escape(handoff["company"]))
+    with ticker:
+        st.subheader(md_escape(handoff["ticker"]))
+
+    facts = [
+        handoff["filing_type"],
+        f"Report period: {format_display_date(handoff['period'])}",
+    ]
+    if meta.get("filing_date"):
+        facts.append(f"Filed: {format_display_date(meta['filing_date'])}")
+    st.caption(" | ".join(facts))
+    if meta["analysis_mode"] == "demo":
+        st.caption("Deterministic synthetic fixture | No SEC or LLM request")
+    return state
 
 
-def render_metrics(metrics: list[dict]) -> None:
-    st.subheader("Métricas financieras")
+def _render_metric_card(metric: dict[str, Any]) -> None:
+    unit = metric["unit"]
+    change = metric["change_pct"]
+    with st.container(border=True):
+        st.metric(
+            metric["name"],
+            format_value(metric["current_value"], unit),
+            delta=None if change is None else format_change_pct(change),
+            delta_color="off",
+        )
+        comparison = metric["comparison_type"]
+        st.caption(comparison or "NO COMPARABLE PERIOD")
+        previous = format_value(metric["previous_value"], unit)
+        if metric["previous_value"] is None:
+            st.caption("Previous: N/A | Not available")
+        else:
+            st.caption(f"Previous: {previous}")
+
+
+def _render_metric_grid(metrics: list[dict[str, Any]]) -> None:
+    for row in (metrics[:4], metrics[4:7]):
+        if not row:
+            continue
+        columns = st.columns(len(row))
+        for column, metric in zip(columns, row, strict=True):
+            with column:
+                _render_metric_card(metric)
+
+
+def render_metrics(metrics: list[dict[str, Any]]) -> None:
+    st.subheader("Canonical financial metrics")
+    st.caption("Delivered by the deterministic XBRL pipeline; no UI recalculation.")
     if not metrics:
-        st.info("El análisis no devolvió métricas comparables.")
+        st.info("No canonical metrics are available.")
         return
-    columns = st.columns(4)
-    for index, metric in enumerate(metrics):
-        unit = metric["unit"]
-        change = metric["change_pct"]
-        with columns[index % 4].container(border=True):
-            st.metric(
-                metric["name"],
-                format_value(metric["current_value"], unit),
-                delta=None if change is None else format_change_pct(change),
-                delta_color="off",
-            )
-            st.badge(
-                metric["comparison_type"] or "Sin comparación",
-                color="blue" if metric["comparison_type"] else "gray",
-            )
-            st.caption(
-                f"Anterior: {format_value(metric['previous_value'], unit)} · "
-                f"Δ {format_change_pct(change)}"
-            )
-            st.caption(
-                f"{metric['current_period'] or NOT_AVAILABLE} vs "
-                f"{metric['previous_period'] or NOT_AVAILABLE}"
-            )
 
-    st.plotly_chart(render_metrics_comparison_chart(metrics))
-    with st.expander("Ver tabla de métricas"):
+    _render_metric_grid(metrics)
+    chart_mode = st.radio(
+        "Financial chart",
+        ["Change %", "Values"],
+        horizontal=True,
+        help="Change is shown only when the pipeline provides a comparable period.",
+    )
+    figure = (
+        render_metrics_change_chart(metrics)
+        if chart_mode == "Change %"
+        else render_metrics_comparison_chart(metrics)
+    )
+    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+    unavailable = sum(metric.get("change_pct") is None for metric in metrics)
+    if unavailable:
+        st.caption(f"{unavailable} metric(s) have no comparable period.")
+
+    with st.expander("Detailed metrics table"):
+        st.caption(
+            "QoQ compares sequential quarters. YoY_YTD compares equivalent "
+            "year-to-date durations."
+        )
         st.dataframe(
             pd.DataFrame(
                 {
-                    "Métrica": m["name"],
-                    "Actual": format_value(m["current_value"], m["unit"]),
-                    "Anterior": format_value(m["previous_value"], m["unit"]),
-                    "Cambio": format_change_pct(m["change_pct"]),
-                    "Comparación": m["comparison_type"] or NOT_AVAILABLE,
-                    "Periodo actual": m["current_period"] or NOT_AVAILABLE,
-                    "Periodo anterior": m["previous_period"] or NOT_AVAILABLE,
+                    "Metric": metric["name"],
+                    "Current": format_value(metric["current_value"], metric["unit"]),
+                    "Previous": format_value(metric["previous_value"], metric["unit"]),
+                    "Change": format_change_pct(metric["change_pct"]),
+                    "Comparison": metric["comparison_type"] or NOT_AVAILABLE,
+                    "Current period": format_metric_period(metric["current_period"]),
+                    "Previous period": format_metric_period(metric["previous_period"]),
                 }
-                for m in metrics
+                for metric in metrics
             ),
             hide_index=True,
+            width="stretch",
         )
 
 
-def render_findings(handoff: dict) -> None:
+def render_executive_snapshot(handoff: dict[str, Any]) -> None:
+    st.subheader("Executive snapshot")
+    metrics = select_executive_metrics(handoff["financial_metrics"])
+    if not metrics:
+        st.info("No canonical metrics are available for the snapshot.")
+    else:
+        columns = st.columns(len(metrics))
+        for column, metric in zip(columns, metrics, strict=True):
+            with column:
+                st.metric(
+                    metric["name"],
+                    format_value(metric["current_value"], metric["unit"]),
+                    delta=(
+                        None
+                        if metric["change_pct"] is None
+                        else format_change_pct(metric["change_pct"])
+                    ),
+                    delta_color="off",
+                )
+
+    positive = handoff["positives"][0]["finding"] if handoff["positives"] else None
+    risk = handoff["risks"][0]["finding"] if handoff["risks"] else None
+    outlook = handoff["management_outlook"]
+    for column, title, value in zip(
+        st.columns(3),
+        ("Positive signal", "Risk to monitor", "Management outlook"),
+        (
+            positive or "No grounded positive development returned.",
+            risk or "No grounded risk returned.",
+            outlook["summary"],
+        ),
+        strict=True,
+    ):
+        with column.container(border=True):
+            st.markdown(f"**{title}**")
+            if title == "Management outlook":
+                sentiment = outlook["sentiment"]
+                st.badge(
+                    sentiment.upper(),
+                    color=SENTIMENT_COLORS.get(sentiment, "gray"),
+                )
+            st.markdown(md_escape(value))
+
+
+def _render_finding_summary(
+    item: dict[str, Any],
+    *,
+    filing_type: str,
+) -> None:
+    with st.container(border=True):
+        st.markdown(f"**{md_escape(item['finding'])}**")
+        st.caption(human_source_label(filing_type, item.get("source_section")))
+        st.caption("Exact supporting evidence is available in Sources.")
+
+
+def render_findings(handoff: dict[str, Any]) -> None:
     left, right = st.columns(2)
     sections = (
-        (left, ":green[✅ Drivers positivos]", handoff["positives"]),
-        (right, ":orange[⚠️ Riesgos]", handoff["risks"]),
+        (left, "Positive developments", handoff["positives"]),
+        (right, "Key risks", handoff["risks"]),
     )
     for column, title, items in sections:
         with column:
             st.subheader(title)
             if not items:
-                st.caption("Sin hallazgos con evidencia suficiente.")
+                st.caption("No sufficiently grounded findings were returned.")
             for item in items:
-                with st.container(border=True):
-                    st.markdown(f"**{md_escape(item['finding'])}**")
-                    st.markdown(f"> {md_escape(item['evidence'])}")
-                    st.caption(
-                        f"Sección: {item['source_section'] or NOT_AVAILABLE} · "
-                        f"Fuente: {item['source_type']} · {item['source_id'] or NOT_AVAILABLE}"
-                    )
+                _render_finding_summary(item, filing_type=handoff["filing_type"])
 
 
-def render_outlook(outlook: dict) -> None:
-    st.subheader("Management Outlook")
-    sentiment = outlook["sentiment"]
-    st.badge(f"Sentiment: {sentiment}", color=SENTIMENT_COLORS.get(sentiment, "gray"))
-    st.markdown(md_escape(outlook["summary"]))
-
-
-def render_summary(handoff: dict) -> None:
+def render_outlook(outlook: dict[str, Any]) -> None:
     with st.container(border=True):
-        st.subheader("Resumen ejecutivo")
+        heading, badge = st.columns([4, 1], vertical_alignment="center")
+        with heading:
+            st.subheader("Management outlook")
+        with badge:
+            sentiment = outlook["sentiment"]
+            st.badge(
+                sentiment.upper(),
+                color=SENTIMENT_COLORS.get(sentiment, "gray"),
+            )
+        st.markdown(md_escape(outlook["summary"]))
+
+
+def render_summary(handoff: dict[str, Any]) -> None:
+    st.subheader("Executive summary")
+    summary_column, action_column = st.columns([3, 1])
+    with summary_column:
         st.markdown(md_escape(handoff["executive_summary"]))
-
-    with st.container(border=True):
-        st.markdown("**🎧 Briefing en audio**")
+    with action_column:
         voices = fetch_voices()
-        voice_col, button_col = st.columns([2, 1], vertical_alignment="bottom")
-        voice = voice_col.selectbox(
-            "Voz (Kokoro)", voices, index=voices.index("af_heart") if "af_heart" in voices else 0
+        voice = st.selectbox(
+            "Voice",
+            voices,
+            index=voices.index("af_heart") if "af_heart" in voices else 0,
+            key="summary_voice",
         )
-        if button_col.button("Generar audio", type="primary", width="stretch"):
-            with st.spinner("Sintetizando audio (la primera vez puede descargar el modelo)..."):
-                response = api_request(
+        if st.button("Copy summary", width="stretch"):
+            st.session_state.summary_copy_ready = True
+        if st.button("Listen to summary", width="stretch"):
+            with st.spinner("Generating summary audio"):
+                response, error = api_request(
                     "POST",
                     "/api/v1/audio/summary",
                     json={"text": handoff["executive_summary"], "voice": voice},
@@ -264,83 +469,178 @@ def render_summary(handoff: dict) -> None:
                 )
             if response is not None:
                 st.session_state.audio = response.content
-        if "audio" in st.session_state:
-            st.audio(st.session_state.audio, format="audio/wav")
-            if handoff["pipeline_metadata"]["analysis_mode"] == "demo":
-                st.caption("Audio generado a partir de un análisis DEMO con datos sintéticos.")
+                st.session_state.audio_mode = handoff["pipeline_metadata"][
+                    "analysis_mode"
+                ]
+            elif error is not None:
+                render_error(error, allow_retry=False)
+
+    if st.session_state.get("summary_copy_ready"):
+        st.caption("Use the copy control in the text block below.")
+        st.code(handoff["executive_summary"], language=None, wrap_lines=True)
+    if "audio" in st.session_state:
+        st.audio(st.session_state.audio, format="audio/wav")
+        if st.session_state.get("audio_mode") == "demo":
+            st.caption("Audio generated from synthetic demo analysis.")
+        else:
+            st.caption("Audio generated from verified real analysis.")
 
 
-def render_compliance(handoff: dict) -> None:
-    verification = handoff["verification"]
-    st.subheader("Verificación determinista")
-    if verification["valid"]:
-        st.success("El análisis superó la verificación determinista.")
-    else:
-        st.error("El análisis no superó la verificación determinista.")
-    for issue in verification["issues"]:
-        show = st.warning if issue["severity"] == "warning" else st.error
-        show(f"**{issue['code']}** · `{issue['field']}` — {md_escape(issue['message'])}")
+def render_verification_details(verification: dict[str, Any]) -> str:
+    state = verification_label(verification)
+    st.caption(
+        "Deterministic verification checks metrics, citations, narrative numbers, "
+        "recommendation language, and summary format."
+    )
+    with st.expander("Verification details"):
+        if not verification["issues"]:
+            st.markdown("**VERIFIED** | No issues reported.")
+        for issue in verification["issues"]:
+            label = f"{issue['severity'].upper()} | {issue['code']} | {issue['field']}"
+            show = st.warning if issue["severity"] == "warning" else st.error
+            show(f"{label}: {md_escape(issue['message'])}")
+    return state
 
-    meta = handoff["pipeline_metadata"]
-    with st.container(border=True):
-        st.markdown("**Metadatos del pipeline**")
-        st.caption(
-            f"Modo: {meta['analysis_mode']} · Proveedor: {meta.get('provider') or NOT_AVAILABLE}"
-            f" · Modelo: {meta.get('model') or NOT_AVAILABLE}"
-            f" · Chunks recuperados: {meta['retrieval_count']}"
+
+def render_sources(handoff: dict[str, Any]) -> None:
+    st.subheader("Evidence and provenance")
+    evidence_items = [
+        ("Positive", item) for item in handoff["positives"]
+    ] + [("Risk", item) for item in handoff["risks"]]
+    if not evidence_items:
+        st.info("No finding-level evidence was returned.")
+    for index, (kind, item) in enumerate(evidence_items, start=1):
+        source_label = human_source_label(
+            handoff["filing_type"], item.get("source_section")
         )
-        if meta["effective_queries"] or meta["retrieved_source_ids"]:
-            with st.expander("Consultas y fuentes recuperadas"):
-                st.caption("Consultas: " + md_escape(", ".join(meta["effective_queries"])))
-                st.caption("Fuentes: " + md_escape(", ".join(meta["retrieved_source_ids"])))
+        with st.expander(f"{kind} {index} | {source_label}"):
+            st.markdown(f"**{md_escape(item['finding'])}**")
+            st.markdown(f"> {md_escape(item['evidence'])}")
+            st.caption(
+                f"Source type: {item['source_type']} | "
+                f"Canonical section: {item.get('source_section') or NOT_AVAILABLE}"
+            )
+            st.caption("Technical source ID")
+            st.code(item.get("source_id") or NOT_AVAILABLE, language=None, wrap_lines=True)
+
+
+def render_technical_details(handoff: dict[str, Any]) -> None:
+    meta = handoff["pipeline_metadata"]
+    with st.expander("Technical details"):
+        rows = {
+            "Analysis mode": str(meta["analysis_mode"]),
+            "Provider": str(meta.get("provider") or NOT_AVAILABLE),
+            "Model": str(meta.get("model") or NOT_AVAILABLE),
+            "Filing date": format_display_date(meta.get("filing_date")),
+            "Report period": format_display_date(handoff.get("period")),
+            "Retrieved evidence chunks": str(meta["retrieval_count"]),
+            "Retrieved source IDs": str(len(meta["retrieved_source_ids"])),
+            "Generation attempts": str(meta.get("generation_attempts", 1)),
+            "Repair used": "yes" if meta.get("repair_used") else "no",
+            "Verification": verification_label(handoff["verification"]),
+        }
+        st.dataframe(
+            pd.DataFrame(rows.items(), columns=["Field", "Value"]),
+            hide_index=True,
+            width="stretch",
+        )
+
+
+def execute_analysis(payload: dict[str, Any]) -> None:
+    """Run one request with a neutral, honest loading state."""
+
+    for key in (
+        "handoff",
+        "audio",
+        "audio_mode",
+        "analysis_error",
+        "summary_copy_ready",
+    ):
+        st.session_state.pop(key, None)
+    st.session_state.last_request = payload
+    started = time.perf_counter()
+    st.caption(
+        "The backend retrieves the filing, processes financial data, generates a "
+        "grounded analysis, and applies deterministic verification."
+    )
+    with st.spinner("Preparing analysis"):
+        response, error = api_request(
+            "POST", "/api/v1/analysis", json=payload, timeout=300
+        )
+    elapsed = time.perf_counter() - started
+    if response is not None:
+        st.session_state.handoff = response.json()
+        st.caption(f"Analysis completed in {elapsed:.1f}s.")
+    else:
+        st.session_state.analysis_error = error
+        st.caption(f"Analysis stopped after {elapsed:.1f}s.")
+    if error is not None:
+        render_error(error, allow_retry=False)
+
+
+def render_result(handoff: dict[str, Any]) -> None:
+    state = render_analysis_header(handoff)
+    if state == "FAILED VERIFICATION":
+        st.error(
+            "This result failed deterministic verification and is not displayed as "
+            "a valid analysis."
+        )
+        render_verification_details(handoff["verification"])
+        render_technical_details(handoff)
+        return
+
+    overview, financials, narrative, sources = st.tabs(
+        ["Overview", "Financials", "Narrative", "Sources"]
+    )
+    with overview:
+        render_executive_snapshot(handoff)
+    with financials:
+        render_metrics(handoff["financial_metrics"])
+    with narrative:
+        render_findings(handoff)
+        render_outlook(handoff["management_outlook"])
+        render_summary(handoff)
+    with sources:
+        render_sources(handoff)
+        render_verification_details(handoff["verification"])
+        render_technical_details(handoff)
+
+
+def _hide_native_running_widget() -> None:
+    """Hide Streamlit's header "Running..." widget.
+
+    That built-in widget cycles through informal pictograms (cyclist, swimmer,
+    wheelchair). Loading feedback is given by the neutral ``st.spinner`` blocks.
+    """
+
+    st.html("<style>[data-testid=\"stStatusWidget\"]{display:none;}</style>")
 
 
 def main() -> None:
-    st.set_page_config(page_title="Fintech Multimodal", page_icon="📊", layout="wide")
-    st.markdown(TERMINAL_CSS, unsafe_allow_html=True)  # static constant, no user data
+    st.set_page_config(
+        page_title="Financial Intelligence Copilot",
+        page_icon=":material/query_stats:",
+        layout="wide",
+    )
+    _hide_native_running_widget()
+    render_product_header()
     payload, run = render_sidebar()
 
-    # First visit: run the demo once so the dashboard is never empty. The flag
-    # stops retries if the API is down or the user later clears the report.
-    if "handoff" not in st.session_state and not st.session_state.get("demo_autoloaded"):
-        st.session_state.demo_autoloaded = True
-        payload, run = DEMO_PAYLOAD, True
-
-    if run:
-        st.session_state.pop("handoff", None)
-        st.session_state.pop("audio", None)
-        if payload is None:
-            st.sidebar.warning("Selecciona ticker, tipo y filing del catálogo.")
+    previous_error = st.session_state.get("analysis_error")
+    retry = render_error(previous_error) if previous_error and not run else False
+    if run or retry:
+        selected_payload = payload if run else st.session_state.get("last_request")
+        if selected_payload is None:
+            st.sidebar.warning("Select an available filing before running analysis.")
         else:
-            with st.spinner("Ejecutando análisis..."):
-                response = api_request("POST", "/api/v1/analysis", json=payload, timeout=300)
-            if response is not None:
-                st.session_state.handoff = response.json()
+            execute_analysis(selected_payload)
 
     handoff = st.session_state.get("handoff")
     if handoff is None:
-        st.title("Fintech Multimodal")
-        st.caption("Configura el análisis en la barra lateral y pulsa «Ejecutar Análisis».")
+        if st.session_state.get("analysis_error") is None:
+            st.info("Configure an analysis in the sidebar, then select **Analyze filing**.")
         return
-
-    render_header(handoff)
-    summary_tab, metrics_tab, findings_tab, compliance_tab = st.tabs(
-        [
-            "🎙️ Resumen Ejecutivo & Audio",
-            "📊 Desglose Financiero & Gráficos",
-            "⚖️ Drivers & Riesgos",
-            "🛡️ Compliance & Verificación",
-        ]
-    )
-    with summary_tab:
-        render_summary(handoff)
-    with metrics_tab:
-        render_metrics(handoff["financial_metrics"])
-    with findings_tab:
-        render_findings(handoff)
-        render_outlook(handoff["management_outlook"])
-    with compliance_tab:
-        render_compliance(handoff)
+    render_result(handoff)
 
 
 main()

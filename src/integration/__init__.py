@@ -13,13 +13,20 @@ from .analysis_handoff import (
     build_analysis_handoff,
     build_tts_input,
 )
-from .errors import IntegrationError, IntegrationErrorCode, map_integration_error
+from .errors import (
+    IntegrationDiagnostic,
+    IntegrationError,
+    IntegrationErrorCode,
+    diagnose_integration_failure,
+    map_integration_error,
+)
 
 __all__ = [
     "AnalysisEvidenceDTO",
     "AnalysisHandoff",
     "AnalysisMetricDTO",
     "AnalysisMode",
+    "IntegrationDiagnostic",
     "IntegrationError",
     "IntegrationErrorCode",
     "ManagementOutlookDTO",
@@ -29,5 +36,6 @@ __all__ = [
     "VerificationIssueDTO",
     "build_analysis_handoff",
     "build_tts_input",
+    "diagnose_integration_failure",
     "map_integration_error",
 ]

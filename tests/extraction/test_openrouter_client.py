@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from typing import Any
@@ -12,6 +13,7 @@ import pytest
 from src.extraction.openrouter_client import (
     LLMConfigurationError,
     LLMResponseError,
+    LLMTotalDeadlineError,
     LLMTransportError,
     OpenRouterLLMClient,
 )
@@ -58,10 +60,13 @@ def completion_response(
     return body
 
 
-def mock_http_client(
+def mock_http_transport(
     handler: Callable[[httpx.Request], httpx.Response],
-) -> httpx.Client:
-    return httpx.Client(transport=httpx.MockTransport(handler))
+) -> httpx.MockTransport:
+    async def async_handler(request: httpx.Request) -> httpx.Response:
+        return handler(request)
+
+    return httpx.MockTransport(async_handler)
 
 
 def make_client(
@@ -71,7 +76,7 @@ def make_client(
     parameters: dict[str, Any] = {
         "api_key": API_KEY,
         "model": MODEL,
-        "http_client": mock_http_client(handler),
+        "http_transport": mock_http_transport(handler),
         "sleep": lambda _: None,
     }
     parameters.update(overrides)
@@ -89,16 +94,24 @@ def test_valid_environment_configuration() -> None:
             "OPENROUTER_MODEL": MODEL,
             "OPENROUTER_BASE_URL": "https://router.example/v1/",
             "OPENROUTER_TIMEOUT_SECONDS": "12.5",
+            "OPENROUTER_TOTAL_DEADLINE_SECONDS": "90",
             "OPENROUTER_MAX_RETRIES": "1",
         },
-        http_client=mock_http_client(successful_handler),
+        http_transport=mock_http_transport(successful_handler),
         sleep=lambda _: None,
     )
 
     assert client.model == MODEL
     assert client.base_url == "https://router.example/v1"
     assert client.timeout_seconds == 12.5
+    assert client.total_deadline_seconds == 90.0
     assert client.max_retries == 1
+
+
+def test_default_total_deadline_is_explicit() -> None:
+    client = make_client(successful_handler)
+
+    assert client.total_deadline_seconds == 90.0
 
 
 def test_missing_api_key_is_rejected() -> None:
@@ -352,6 +365,44 @@ def test_timeout_is_explicit_and_retried() -> None:
         client.generate_structured(system_prompt="system", user_prompt="user")
     assert len(requests) == 2
     assert requests[0].extensions["timeout"]["read"] == 7.5
+
+
+def test_total_deadline_cancels_a_hung_generation() -> None:
+    cancelled = False
+
+    async def hung_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal cancelled
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        raise AssertionError("unreachable")
+
+    client = OpenRouterLLMClient(
+        api_key=API_KEY,
+        model=MODEL,
+        total_deadline_seconds=0.02,
+        max_retries=5,
+        http_transport=httpx.MockTransport(hung_handler),
+        sleep=lambda _: None,
+    )
+
+    with pytest.raises(LLMTotalDeadlineError) as caught:
+        client.generate_structured(system_prompt="system", user_prompt="user")
+
+    assert caught.value.reason_code == "TOTAL_DEADLINE_EXCEEDED"
+    assert cancelled is True
+
+
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), 601])
+def test_invalid_total_deadline_is_rejected(value: float) -> None:
+    with pytest.raises(LLMConfigurationError, match="TOTAL_DEADLINE"):
+        OpenRouterLLMClient(
+            api_key=API_KEY,
+            model=MODEL,
+            total_deadline_seconds=value,
+        )
 
 
 def test_api_key_never_appears_in_error_messages() -> None:

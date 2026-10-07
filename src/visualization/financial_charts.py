@@ -9,15 +9,11 @@ from __future__ import annotations
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-NOT_AVAILABLE = "N/D"
-# Dark Slate Terminal tokens (DESIGN.md).
-CURRENT_COLOR = "#38BDF8"   # accent-blue
-PREVIOUS_COLOR = "#64748B"  # neutral-previous
-GRID_COLOR = "#334155"      # border-subtle
-TEXT_COLOR = "#F8FAFC"      # text-primary
-MUTED_COLOR = "#94A3B8"     # text-muted
-FONT_FAMILY = "Inter, Segoe UI, sans-serif"
-UNIT_LABELS = {"usd": "USD", "usdPerShare": "USD por acción"}
+NOT_AVAILABLE = "N/A"
+CURRENT_COLOR = "#2a78d6"   # categorical slot 1 (blue)
+PREVIOUS_COLOR = "#7b8794"  # neutral comparison series
+CHANGE_COLOR = "#607d8b"    # neutral: direction is not investment sentiment
+UNIT_LABELS = {"usd": "USD values", "usdPerShare": "Per-share values"}
 
 
 def format_value(value: float | None, unit: str | None) -> str:
@@ -52,14 +48,13 @@ def _bar(metrics: list[dict], field: str, period_field: str, name: str, color: s
         x=[m.get(field) for m in metrics],
         text=[format_value(m.get(field), m.get("unit")) for m in metrics],
         textposition="outside",
-        textfont={"color": TEXT_COLOR},
         customdata=[
             [m.get(period_field) or NOT_AVAILABLE, m.get("comparison_type") or NOT_AVAILABLE]
             for m in metrics
         ],
         hovertemplate=(
             "<b>%{y}</b><br>" + name + ": %{text}<br>"
-            "Periodo: %{customdata[0]}<br>Comparación: %{customdata[1]}<extra></extra>"
+            "Period: %{customdata[0]}<br>Comparison: %{customdata[1]}<extra></extra>"
         ),
         marker={"color": color, "cornerradius": 4},
         legendgroup=name,
@@ -81,17 +76,12 @@ def render_metrics_comparison_chart(financial_metrics: list[dict]) -> go.Figure:
     if not plottable:
         figure = go.Figure()
         figure.add_annotation(
-            text="Sin métricas comparables para graficar",
+            text="No comparable metrics available",
             showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper",
         )
         figure.update_xaxes(visible=False)
         figure.update_yaxes(visible=False)
-        figure.update_layout(
-            height=200,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font={"family": FONT_FAMILY, "color": MUTED_COLOR},
-        )
+        figure.update_layout(height=200)
         return figure
 
     by_unit: dict[str | None, list[dict]] = {}
@@ -101,38 +91,97 @@ def render_metrics_comparison_chart(financial_metrics: list[dict]) -> go.Figure:
     figure = make_subplots(
         rows=len(by_unit),
         cols=1,
-        subplot_titles=[UNIT_LABELS.get(u, u or "Sin unidad") for u in by_unit],
+        subplot_titles=[UNIT_LABELS.get(u, u or "Unitless values") for u in by_unit],
         row_heights=[len(group) for group in by_unit.values()],
-        vertical_spacing=0.1,
+        vertical_spacing=0.12,
     )
     for row, group in enumerate(by_unit.values(), start=1):
         figure.add_trace(
-            _bar(group, "current_value", "current_period", "Actual", CURRENT_COLOR, row == 1),
+            _bar(group, "current_value", "current_period", "Current", CURRENT_COLOR, row == 1),
             row=row, col=1,
         )
         figure.add_trace(
-            _bar(group, "previous_value", "previous_period", "Anterior", PREVIOUS_COLOR, row == 1),
+            _bar(group, "previous_value", "previous_period", "Previous", PREVIOUS_COLOR, row == 1),
             row=row, col=1,
         )
         figure.update_yaxes(autorange="reversed", row=row, col=1)
 
-    figure.update_xaxes(
-        showticklabels=False, showgrid=True, gridcolor=GRID_COLOR,
-        zeroline=True, zerolinecolor=MUTED_COLOR,
-    )
-    figure.update_yaxes(tickfont={"color": TEXT_COLOR, "size": 12})
-    figure.update_annotations(font={"color": MUTED_COLOR, "size": 12})  # unit panel titles
+    figure.update_xaxes(showticklabels=False, showgrid=False, zeroline=True)
     figure.update_layout(
         barmode="group",
         bargap=0.35,
         bargroupgap=0.08,
-        height=120 + 60 * len(plottable),
-        margin={"l": 8, "r": 56, "t": 48, "b": 8},
-        font={"family": FONT_FAMILY, "color": MUTED_COLOR, "size": 12},
+        height=130 + 55 * len(plottable),
+        margin={"l": 10, "r": 60, "t": 60, "b": 10},
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.04, "x": 0},
-        hoverlabel={"bgcolor": "#1E293B", "bordercolor": GRID_COLOR, "font_color": TEXT_COLOR},
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
+        uniformtext_minsize=10,
+    )
+    return figure
+
+
+def render_metrics_change_chart(financial_metrics: list[dict]) -> go.Figure:
+    """Render delivered percentage changes without assigning good/bad colours."""
+
+    comparable = [
+        metric
+        for metric in financial_metrics
+        if metric.get("change_pct") is not None
+    ]
+    if not comparable:
+        figure = go.Figure()
+        figure.add_annotation(
+            text="No comparable changes available",
+            showarrow=False,
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+        )
+        figure.update_xaxes(visible=False)
+        figure.update_yaxes(visible=False)
+        figure.update_layout(height=200)
+        return figure
+
+    figure = go.Figure(
+        go.Bar(
+            orientation="h",
+            y=[metric["name"] for metric in comparable],
+            x=[metric["change_pct"] for metric in comparable],
+            text=[format_change_pct(metric["change_pct"]) for metric in comparable],
+            textposition="outside",
+            customdata=[
+                [
+                    metric.get("comparison_type") or NOT_AVAILABLE,
+                    metric.get("current_period") or NOT_AVAILABLE,
+                    metric.get("previous_period") or NOT_AVAILABLE,
+                ]
+                for metric in comparable
+            ],
+            hovertemplate=(
+                "<b>%{y}</b><br>Change: %{text}<br>"
+                "Comparison: %{customdata[0]}<br>"
+                "Current period: %{customdata[1]}<br>"
+                "Previous period: %{customdata[2]}<extra></extra>"
+            ),
+            marker={"color": CHANGE_COLOR, "cornerradius": 4},
+        )
+    )
+    figure.update_yaxes(autorange="reversed")
+    figure.update_xaxes(
+        ticksuffix="%",
+        showgrid=True,
+        gridcolor="rgba(127,127,127,0.15)",
+        zeroline=True,
+        zerolinecolor="rgba(127,127,127,0.6)",
+    )
+    figure.update_layout(
+        height=150 + 48 * len(comparable),
+        margin={"l": 10, "r": 60, "t": 20, "b": 30},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        showlegend=False,
         uniformtext_minsize=10,
     )
     return figure
