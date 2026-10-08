@@ -1,4 +1,4 @@
-"""Pure presentation helpers shared by the Streamlit dashboard and its tests.
+"""Pure presentation helpers shared by the Dash dashboard and its tests.
 
 These helpers format API data only. They never query SEC, call an LLM, or
 recalculate financial values.

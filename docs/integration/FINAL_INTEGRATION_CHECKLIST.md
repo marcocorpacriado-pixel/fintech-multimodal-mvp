@@ -44,12 +44,12 @@ Verificación histórica de esta integración: hardening final, 2026-10-06.
 - [x] Auditar `src/api/`, `src/visualization/` y `app/` antes del merge. — PASS: auditoría arquitectónica de solo lectura
 - [x] Reconciliar respuestas API con `AnalysisHandoff`. — PASS: `response_model=AnalysisHandoff`; smoke demo y real con 200
 - [x] Consumir métricas sin recalcular `change_pct` ni comparabilidad temporal. — PASS: auditoría de código
-- [x] Mostrar `analysis_mode` y estado de verification. — PASS: comprobado con `streamlit.testing.AppTest` (no inspección visual)
+- [x] Mostrar `analysis_mode` y estado de verification. — PASS: comprobado con los tests de callbacks de `tests/test_dash_app.py` y una revisión visual en Chrome headless
 - [x] Manejar `IntegrationError` sin exponer secretos o stack traces. — PASS: modo real con fecha inválida → 422 `INPUT_ERROR`; voz inválida → 422; sin traceback
 - [x] Integrar positives, risks, outlook y executive summary. — PASS: secciones renderizadas según `AppTest`
 - [x] Integrar controles de TTS usando únicamente `TTSInput.text`. — PASS: la UI envía `executive_summary` a `/api/v1/audio/summary`
 - [x] Definir UX de fallback real/demo de forma explícita. — PASS: selector explícito, badge DEMO/REAL, sin fallback silencioso
-- [x] Añadir tests de API/UI acordes con el contrato final. — PASS: `test_api.py`, `test_streamlit_app.py`, `test_visualization.py`
+- [x] Añadir tests de API/UI acordes con el contrato final. — PASS: `test_api.py`, `test_dash_app.py`, `test_visualization.py`
 
 ## Merge and dependency reconciliation
 

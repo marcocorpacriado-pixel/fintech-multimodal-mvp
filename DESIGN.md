@@ -8,7 +8,7 @@ Proporcionar una interfaz analítica institucional de alto contraste, sobria y l
 
 - **Product:** Fintech Multimodal MVP (Financial Intelligence Copilot)
 - **Audience:** Analistas financieros, gestores de carteras y auditores cuantitativos.
-- **Surface:** Dashboard interactivo (Streamlit + Plotly) que consume `AnalysisHandoff` vía HTTP.
+- **Surface:** Dashboard interactivo (Dash + Plotly) que consume `AnalysisHandoff` vía HTTP.
 - **Visual style:** Financial terminal, densidad de datos alta, dark slate, contraste nítido.
 
 ## 1. Foundations & Tokens
@@ -23,7 +23,7 @@ Proporcionar una interfaz analítica institucional de alto contraste, sobria y l
 | `text-primary` | `#F8FAFC` | Texto principal y valores KPI | 18.30:1 / 13.98:1 |
 | `text-muted` | `#94A3B8` | Texto secundario, captions, etiquetas KPI, metadatos, leyenda XAI | 7.47:1 / 5.71:1 |
 | `accent-blue` | `#38BDF8` | Links, foco, serie "Actual", polaridad neutral | 8.94:1 / 6.83:1 |
-| `accent-primary` | `#0284C7` | `primaryColor` de Streamlit (botones primarios, relleno) | no se usa como texto sobre fondo oscuro |
+| `accent-primary` | `#0284C7` | `--primary` en `app/assets/style.css` (botones primarios, relleno) | no se usa como texto sobre fondo oscuro |
 | `sentiment-positive` (emerald) | `#10B981` | Drivers positivos, polaridad positiva | 7.55:1 / 5.77:1 |
 | `sentiment-negative` (crimson) | `#EF4444` | Riesgos, polaridad negativa (solo XAI) | 5.09:1 / 3.89:1 |
 | `sentiment-unscored` (slate) | `#94A3B8` | Polaridad sin puntuación / desconocida | 7.47:1 / 5.71:1 |
@@ -42,18 +42,19 @@ Proporcionar una interfaz analítica institucional de alto contraste, sobria y l
 
 | Capa | Dónde | Qué cubre |
 |---|---|---|
-| Tema nativo | `.streamlit/config.toml` | Colores base, `grayColor` (= `text-muted`), fuente Inter, radio 8px, tamaño de valor KPI, colores de badges |
-| CSS inyectado | `app/streamlit_app.py` (`TERMINAL_CSS`) | Etiquetas KPI, cabecera sticky, tooltip instantáneo `.xai-pill`, foco, chat flotante |
+| Tokens y CSS | `app/assets/style.css` (variables `:root`) | Colores base, `--muted` (= `text-muted`), fuente Inter (Google Fonts), radio 8px, etiquetas y valores KPI, badges, cabecera sticky, tooltip instantáneo `.xai-pill`, foco, chat flotante, tema de `dcc.Dropdown` y `dcc.Slider` |
+| Vistas | `app/components.py` | Componentes Dash puros (sin callbacks ni HTTP) que construyen cada sección a partir del `AnalysisHandoff` |
+| Tema Plotly | `app/components.py` (`themed`) | `plotly_dark`, fondo transparente y fuente Inter sobre las figuras de `src/visualization` |
 | HTML de presentación | `src/visualization/presentation.py` | Heatmap XAI, badge de polaridad, leyenda de atribución |
 | Plotly | `src/visualization/financial_charts.py` | Comparativas y cambios porcentuales sin recalcular métricas |
 
-Streamlit lee `.streamlit/config.toml` desde el directorio de trabajo: arrancar siempre desde la raíz (`streamlit run app/streamlit_app.py`).
+Dash sirve automáticamente `app/assets/` (CSS y JS). Arranque local desde la raíz: `python -m app.dash_app`; producción: `gunicorn app.dash_app:server`.
 
 ## 2. Component Specifications
 
-### Layout de 4 pestañas (`st.tabs`, `key="result_tabs"`)
+### Layout de 5 pestañas (`dcc.Tabs`, `id="result-tabs"`)
 
-La clave conserva la pestaña activa entre reruns (p. ej. al cerrar el chat). Las etiquetas en la UI están en inglés; la columna "Nombre de pitch" es la que se usa en presentaciones.
+Las pestañas se resuelven en el cliente: cambiar de pestaña o cerrar el chat no vuelve a pedir nada al servidor. Las etiquetas en la UI están en inglés; la columna "Nombre de pitch" es la que se usa en presentaciones.
 
 | # | Etiqueta UI | Nombre de pitch | Contenido |
 |---|---|---|---|
@@ -61,6 +62,7 @@ La clave conserva la pestaña activa entre reruns (p. ej. al cerrar el chat). La
 | 2 | Financials | Métricas YoY & Plotly | Siete métricas canónicas, badges de comparación, gráficos Plotly y tabla detallada |
 | 3 | Narrative | Drivers & XAI Outlook (+ Audio) | Positivos y riesgos con su fuente, outlook FinBERT con heatmap XAI, resumen ejecutivo y reproductor TTS |
 | 4 | Sources | Compliance & Verificación | Evidencia citada, resultado del verifier determinista y detalles técnicos |
+| 5 | Performance | Latencia y coste | Latencia y coste medidos por inferencia en la sesión y proyección de viabilidad mensual |
 
 - **Header sticky:** ticker, periodo reportado, filing date, tipo de filing y badge LIVE / DEMO (texto + color).
 - **Sidebar (real):** ticker desde lista cerrada (`TICKERS`); filings descubiertos vía `GET /api/v1/filings/{ticker}`.
@@ -68,7 +70,7 @@ La clave conserva la pestaña activa entre reruns (p. ej. al cerrar el chat). La
 
 ### Componente XAI (heatmap FinBERT)
 
-Generado por `highlight_tokens_html` / `outlook_xai_html` y renderizado con `st.html`. Todo el texto del filing se escapa con `html.escape`; solo los spans son markup.
+Generado por `highlight_tokens_html` / `outlook_xai_html` y renderizado con `dcc.Markdown(dangerously_allow_html=True)` tras colapsar espacios en blanco. Todo el texto del filing se escapa con `html.escape`; solo los spans son markup.
 
 - **Badge de polaridad:** pill 999px, fondo `rgba(<sentimiento>, 0.10)`, borde `rgba(<sentimiento>, 0.6)`, texto en el color de sentimiento, texto `● POLARITY: <LABEL>` (el color nunca va solo).
 - **Pills `.xai-pill`:** una por palabra con atribución > 0.
@@ -103,16 +105,16 @@ Ratios calculados con la fórmula de luminancia relativa de WCAG. Mínimos: 4.5:
 | Serie "Anterior" | `#64748B` / `#0B0F19` | 4.02:1 | ✅ 1.4.11 |
 | Serie "Actual" | `#38BDF8` / `#0B0F19` | 8.94:1 | ✅ 1.4.11 |
 
-- **Teclado:** pills XAI enfocables (`tabindex="0"`), tooltip visible también en `:focus-visible`; controles Streamlit nativos navegables con Tab.
+- **Teclado:** pills XAI enfocables (`tabindex="0"`), tooltip visible también en `:focus-visible`; controles nativos y de Dash navegables con Tab.
 - **Foco visible (2.4.7 / 2.4.11):** outline 2px `#38BDF8` (8.94:1 sobre base).
 - **Uso del color (1.4.1):** cada badge, serie y polaridad lleva etiqueta textual.
 - **Tooltip (1.4.13):** aparece en hover y foco, no tapa el disparador y desaparece al salir. Limitación conocida: al ser CSS puro no se descarta con Esc; el mismo dato está en `title`.
 
 ## Rules: Do
 
-- Utilizar `st.tabs` para dividir la carga cognitiva en lugar de una página vertical infinita.
+- Utilizar pestañas (`dcc.Tabs`) para dividir la carga cognitiva en lugar de una página vertical infinita.
 - Respetar los valores brutos de la API: `change_pct` ya viene en puntos porcentuales; `None` se renderiza "N/A".
-- Escapar todo texto procedente de filings (`md_escape` en markdown, `html.escape` en `st.html`).
+- Escapar todo texto procedente de filings (como hijos de componentes Dash, que React escapa, y `html.escape` en el HTML del heatmap).
 - Verificar el contraste de cualquier color nuevo contra `#0B0F19` y `#1E293B` antes de usarlo como texto.
 
 ## Rules: Don't

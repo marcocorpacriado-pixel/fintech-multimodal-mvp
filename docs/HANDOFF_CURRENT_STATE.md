@@ -20,7 +20,7 @@ BM25 retrieval, and seven canonical metrics. A structured LLM selects IDs from
 a deterministic evidence catalog; the backend reconstructs literal evidence,
 source, and section. FinBERT and Integrated Gradients enrich the grounded
 outlook before deterministic verification produces `AnalysisHandoff` for
-FastAPI, Streamlit/Plotly, filing chat, local Kokoro TTS, and optional Groq
+FastAPI, Dash/Plotly, filing chat, local Kokoro TTS, and optional Groq
 Orpheus TTS for English speech.
 
 The product UI has four result tabs—Overview, Financials, Narrative, and
@@ -33,7 +33,7 @@ Sources—plus the floating **Ask about this filing** experience.
   bounded one-shot repair, and deterministic verification.
 - Backend-side evidence/source/section reconstruction from `evidence_id`.
 - FinBERT financial sentiment and Integrated Gradients local explanation.
-- FastAPI, Streamlit, Plotly, explicit real/demo modes, and safe errors.
+- FastAPI, Dash, Plotly, explicit real/demo modes, and safe errors.
 - Grounded filing chat over verified handoff context.
 - Groq STT as voice input to chat, Kokoro as the default local TTS, and a
   selectable Groq Orpheus path for English chat audio. Spanish speech routes

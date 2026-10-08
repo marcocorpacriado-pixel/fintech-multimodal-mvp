@@ -154,9 +154,9 @@ jobs:
         env:
           URL: ${{ steps.deploy.outputs.url }}
         run: |
-          # Streamlit expone /_stcore/health. El cold start (min=0) puede tardar.
+          # La app Dash expone /_health. El cold start (min=0) puede tardar.
           curl -fsS --retry 6 --retry-delay 10 --retry-all-errors --max-time 60 \
-            "${URL}/_stcore/health"
+            "${URL}/_health"
 
       - name: Summary
         if: always()

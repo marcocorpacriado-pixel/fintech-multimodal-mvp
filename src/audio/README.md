@@ -96,8 +96,8 @@ normalizado se envía al proveedor externo; Kokoro mantiene la síntesis local.
 ## Validación
 
 Los contratos HTTP, selección/routing de proveedor, errores seguros y el flujo
-Streamlit están cubiertos por `tests/test_api.py` y
-`tests/test_streamlit_app.py`. Los tests específicos de audio cubren chunking
+Dash están cubiertos por `tests/test_api.py` y
+`tests/test_dash_app.py`. Los tests específicos de audio cubren chunking
 Groq, concatenación WAV, normalización hablable y selección de hilos Kokoro.
 No realizan llamadas pagadas.
 
@@ -118,6 +118,6 @@ forma parte de la suite offline ordinaria.
 - Groq TTS reutiliza el cliente autenticado de STT y limita el paralelismo.
 - `Transcription` y `SynthesisResult` son contratos tipados, no diccionarios
   ad hoc.
-- FastAPI es la frontera HTTP y Streamlit consume esa API.
+- FastAPI es la frontera HTTP y Dash consume esa API.
 - El módulo no calcula métricas, no llama al pipeline financiero y no conserva
   historial de chat.
