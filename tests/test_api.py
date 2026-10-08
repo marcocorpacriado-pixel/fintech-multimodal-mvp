@@ -420,3 +420,101 @@ def test_transcribe_provider_failure_is_503():
 
     assert response.status_code == 503
     assert "SECRET" not in response.text
+
+
+def test_audio_summary_groq_provider_gets_normalized_english_text():
+    fake = SimpleNamespace(audio_bytes=b"RIFFgroq")
+    with (
+        patch("src.api.main.synthesize_groq", return_value=fake) as groq,
+        patch("src.api.main.synthesize") as kokoro,
+    ):
+        response = client.post(
+            "/api/v1/audio/summary",
+            json={"text": "Cash fell ~8.8% [R1].", "voice": "troy", "provider": "groq"},
+        )
+
+    assert response.status_code == 200
+    assert response.content == b"RIFFgroq"
+    groq.assert_called_once_with("Cash fell about 8.8 percent.", voice="troy")
+    kokoro.assert_not_called()
+
+
+def test_audio_summary_local_provider_normalizes_spanish_text():
+    fake = SimpleNamespace(audio_bytes=b"RIFF")
+    with patch("src.api.main.synthesize", return_value=fake) as kokoro:
+        response = client.post(
+            "/api/v1/audio/summary",
+            json={"text": "Subió un 5,9% [M1].", "voice": "ef_dora"},
+        )
+
+    assert response.status_code == 200
+    kokoro.assert_called_once_with(
+        text="Subió un 5,9 por ciento.", voice="ef_dora", language="es"
+    )
+
+
+def test_audio_summary_groq_unknown_voice_is_input_error():
+    with patch("src.api.main.synthesize_groq", side_effect=ValueError("bad voice")):
+        response = client.post(
+            "/api/v1/audio/summary",
+            json={"text": "Hi", "voice": "af_heart", "provider": "groq"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "INPUT_ERROR"
+
+
+def test_audio_summary_groq_failure_is_safe_503():
+    with patch(
+        "src.api.main.synthesize_groq",
+        side_effect=RuntimeError("model_terms_required gsk_SECRET"),
+    ):
+        response = client.post(
+            "/api/v1/audio/summary",
+            json={"text": "Hi", "voice": "troy", "provider": "groq"},
+        )
+
+    assert response.status_code == 503
+    assert "SECRET" not in response.text
+
+
+def test_voices_lists_groq_voices_without_loading_kokoro():
+    with patch("src.api.main.list_voices") as kokoro_voices:
+        response = client.get("/api/v1/audio/voices", params={"provider": "groq"})
+
+    assert response.json() == {"voices": api_main.GROQ_VOICES}
+    kokoro_voices.assert_not_called()
+
+
+def test_spanish_text_with_groq_routes_to_kokoro_spanish_voice():
+    fake = SimpleNamespace(audio_bytes=b"RIFF")
+    with (
+        patch("src.api.main.synthesize", return_value=fake) as kokoro,
+        patch("src.api.main.synthesize_groq") as groq,
+    ):
+        response = client.post(
+            "/api/v1/audio/summary",
+            json={"text": "Los ingresos subieron.", "voice": "troy", "provider": "groq"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["X-TTS-Provider"] == "local"
+    assert response.headers["X-TTS-Voice"] == "ef_dora"
+    groq.assert_not_called()
+    kokoro.assert_called_once_with(
+        text="Los ingresos subieron.", voice="ef_dora", language="es"
+    )
+
+
+def test_english_text_with_spanish_voice_uses_english_voice():
+    fake = SimpleNamespace(audio_bytes=b"RIFF")
+    with patch("src.api.main.synthesize", return_value=fake) as kokoro:
+        response = client.post(
+            "/api/v1/audio/summary",
+            json={"text": "Revenue rose and cash fell.", "voice": "ef_dora"},
+        )
+
+    assert response.headers["X-TTS-Voice"] == "af_heart"
+    kokoro.assert_called_once_with(
+        text="Revenue rose and cash fell.", voice="af_heart", language="en-us"
+    )

@@ -127,9 +127,43 @@ def _get_kokoro():
                 "kokoro-onnx no está instalado. Ejecuta: pip install kokoro-onnx soundfile"
             ) from e
 
+        import onnxruntime as ort
+
         model_path, voices_path = _ensure_model_files()
-        _kokoro = Kokoro(str(model_path), str(voices_path))
+        # Por defecto ONNX Runtime lanza tantos hilos como cores tenga el HOST;
+        # en un contenedor limitado (Cloud Run: 2 vCPU) eso provoca throttling
+        # y la síntesis tarda ~9x más. Ajustamos los hilos a la cuota real.
+        threads, source = _onnx_threads_with_source()
+        # Visible en los logs de Cloud Run: confirma cuántas CPUs detecta.
+        print(f"[kokoro] ONNX threads={threads} (source: {source})", flush=True)
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = threads
+        options.inter_op_num_threads = 1
+        session = ort.InferenceSession(
+            str(model_path), sess_options=options, providers=["CPUExecutionProvider"]
+        )
+        _kokoro = Kokoro.from_session(session, str(voices_path))
     return _kokoro
+
+
+def _onnx_threads() -> int:
+    """Hilos ONNX = CPUs disponibles según la cuota cgroup (o KOKORO_THREADS)."""
+    return _onnx_threads_with_source()[0]
+
+
+def _onnx_threads_with_source() -> tuple[int, str]:
+    override = os.getenv("KOKORO_THREADS")
+    if override and override.isdigit() and int(override) > 0:
+        return int(override), "env"
+    try:
+        quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()[:2]
+        if quota != "max":
+            return max(1, int(int(quota) / int(period))), "cgroup"
+    except (OSError, ValueError):
+        pass
+    if hasattr(os, "sched_getaffinity"):
+        return max(1, len(os.sched_getaffinity(0))), "affinity"
+    return max(1, os.cpu_count() or 1), "cpu_count"
 
 
 # ---- API pública ------------------------------------------------------------

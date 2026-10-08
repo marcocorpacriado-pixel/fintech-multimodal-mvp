@@ -539,3 +539,59 @@ def test_chat_markdown_keeps_formatting_but_blocks_latex():
     assert namespace["_chat_markdown"]("**Risks:** cash $830M to $910M") == (
         "**Risks:** cash \\$830M to \\$910M"
     )
+
+
+def test_chat_listen_uses_selected_groq_engine_and_voice():
+    fake = _FakeChatClient(["Cash fell ~8.8% [R1]."])
+    audio = SimpleNamespace(audio_bytes=b"RIFF-groq")
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("httpx.stream", side_effect=_stream_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart", "ef_dora"]),
+        patch("src.api.main.OpenRouterChatClient.from_env", return_value=fake),
+        patch("src.api.main.synthesize_groq", return_value=audio) as groq,
+        patch("src.api.main.synthesize") as kokoro,
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+        _button(at, "Ask about this filing").click().run()
+        at.chat_input[0].set_value("Risks?").run()
+        engine = next(radio for radio in at.radio if radio.label == "Voice engine")
+        engine.set_value("groq").run()
+        voice = next(box for box in at.selectbox if box.label == "English voice")
+        assert voice.options == ["troy", "hannah", "austin", "autumn", "diana", "daniel"]
+        voice.set_value("hannah").run()
+        _button(at, "Listen").click().run()
+
+    assert not at.exception
+    groq.assert_called_once_with("Cash fell about 8.8 percent.", voice="hannah")
+    kokoro.assert_not_called()
+    assert "Read with Groq (fast) · hannah" in _all_text(at)
+
+
+def test_spanish_answer_falls_back_to_kokoro_even_with_groq_selected():
+    fake = _FakeChatClient(["El efectivo cayó un ~8,8% [R1]."])
+    audio = SimpleNamespace(audio_bytes=b"RIFF-kokoro")
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("httpx.stream", side_effect=_stream_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart", "ef_dora"]),
+        patch("src.api.main.OpenRouterChatClient.from_env", return_value=fake),
+        patch("src.api.main.synthesize_groq") as groq,
+        patch("src.api.main.synthesize", return_value=audio) as kokoro,
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+        _button(at, "Ask about this filing").click().run()
+        at.chat_input[0].set_value("¿Riesgos?").run()
+        next(r for r in at.radio if r.label == "Voice engine").set_value("groq").run()
+        _button(at, "Listen").click().run()
+
+    assert not at.exception
+    groq.assert_not_called()
+    kokoro.assert_called_once_with(
+        text="El efectivo cayó un aproximadamente 8,8 por ciento.",
+        voice="ef_dora",
+        language="es",
+    )
+    assert "Read with Local (Kokoro) · ef_dora (Groq has no Spanish voice)" in _all_text(at)

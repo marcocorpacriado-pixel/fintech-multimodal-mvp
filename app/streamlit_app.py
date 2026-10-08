@@ -52,8 +52,8 @@ CHAT_SUGGESTIONS = (
     "What are the main risks?",
     "What does management expect going forward?",
 )
-# Default Kokoro voice for a transcribed question language (prefix = language).
-CHAT_VOICE_BY_LANGUAGE = {"es": "ef_dora", "en": "af_heart"}
+# Chat TTS engines: Kokoro on the container (EN/ES) or Groq Orpheus (fast, EN).
+CHAT_TTS_PROVIDERS = {"local": "Local (Kokoro)", "groq": "Groq (fast)"}
 CHAT_STATE_KEYS = (
     "chat_messages",
     "chat_audio",
@@ -181,9 +181,14 @@ def api_request(
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def fetch_voices() -> list[str]:
+def fetch_voices(provider: str = "local") -> list[str]:
     try:
-        response = httpx.request("GET", f"{API_URL}/api/v1/audio/voices", timeout=30)
+        response = httpx.request(
+            "GET",
+            f"{API_URL}/api/v1/audio/voices",
+            params={"provider": provider},
+            timeout=30,
+        )
         return response.json()["voices"] if response.is_success else DEFAULT_VOICES
     except (httpx.HTTPError, ValueError, KeyError):
         return DEFAULT_VOICES
@@ -653,10 +658,6 @@ def _transcribe_question(audio: Any) -> str | None:
         st.session_state.chat_error = error
         return None
     body = response.json()
-    voice = CHAT_VOICE_BY_LANGUAGE.get(str(body.get("language")))
-    if voice:
-        # Applied on the next run, before the voice selectbox is instantiated.
-        st.session_state.chat_voice_next = voice
     return str(body.get("text") or "").strip() or None
 
 
@@ -680,25 +681,73 @@ def _render_chat_message(index: int, message: dict[str, Any], handoff: dict[str,
             with st.expander(f"Sources cited ({len(sources)})"):
                 for tag, label in sources:
                     st.markdown(f"**{tag}** · {md_escape(label)}")
-        audio_cache: dict[int, bytes] = st.session_state.setdefault("chat_audio", {})
-        if index in audio_cache:
-            st.audio(audio_cache[index], format="audio/wav")
+        provider, voice = _chat_tts_selection()
+        # Cached per engine and voice, so switching either regenerates the audio.
+        cache_key = f"{index}:{provider}:{voice}"
+        audio_cache: dict[str, dict[str, Any]] = st.session_state.setdefault(
+            "chat_audio", {}
+        )
+        if cache_key in audio_cache:
+            cached = audio_cache[cache_key]
+            st.audio(cached["audio"], format="audio/wav")
+            st.caption(cached["note"])
         elif st.button("Listen", key=f"chat_tts_{index}", icon=":material/volume_up:"):
-            with st.spinner("Generating audio"):
+            with st.spinner(f"Generating audio with {CHAT_TTS_PROVIDERS[provider]}"):
                 response, error = api_request(
                     "POST",
                     "/api/v1/audio/summary",
                     json={
                         "text": text_for_speech(message["content"])[:5000],
-                        "voice": st.session_state.get("chat_voice", "af_heart"),
+                        "voice": voice,
+                        "provider": provider,
                     },
                     timeout=300,
                 )
             if response is not None:
-                audio_cache[index] = response.content
+                used = response.headers.get("X-TTS-Provider", provider)
+                note = f"Read with {CHAT_TTS_PROVIDERS.get(used, used)}"
+                if response.headers.get("X-TTS-Voice"):
+                    note += f" · {response.headers['X-TTS-Voice']}"
+                if used != provider:
+                    note += " (Groq has no Spanish voice)"
+                audio_cache[cache_key] = {"audio": response.content, "note": note}
                 st.rerun()
             elif error is not None:
                 render_error(error, allow_retry=False)
+
+
+def _chat_tts_selection() -> tuple[str, str]:
+    """Engine and voice currently chosen in the chat panel."""
+
+    provider = st.session_state.get("chat_tts_provider") or "local"
+    if provider == "groq":
+        return provider, st.session_state.get("chat_voice_groq") or "troy"
+    return provider, st.session_state.get("chat_voice") or "af_heart"
+
+
+def _render_chat_voice_controls() -> None:
+    provider = st.radio(
+        "Voice engine",
+        list(CHAT_TTS_PROVIDERS),
+        format_func=CHAT_TTS_PROVIDERS.get,
+        horizontal=True,
+        key="chat_tts_provider",
+    )
+    voices = fetch_voices(provider)
+    if provider == "groq":
+        st.selectbox("English voice", voices, key="chat_voice_groq")
+    else:
+        english = [voice for voice in voices if voice[:1] in "ab"] or voices
+        st.selectbox(
+            "English voice",
+            english,
+            index=english.index("af_heart") if "af_heart" in english else 0,
+            key="chat_voice",
+        )
+    st.caption(
+        "Audio follows the answer's language: Spanish answers are read with a "
+        "Kokoro Spanish voice (Groq has no Spanish voice)."
+    )
 
 
 def render_chat(handoff: dict[str, Any]) -> None:
@@ -713,16 +762,7 @@ def render_chat(handoff: dict[str, Any]) -> None:
         st.caption(
             "Answers use only the verified results above and cite them, e.g. [M1]."
         )
-    voices = fetch_voices()
-    next_voice = st.session_state.pop("chat_voice_next", None)
-    if next_voice in voices:
-        st.session_state.chat_voice = next_voice
-    st.selectbox(
-        "Answer voice",
-        voices,
-        index=voices.index("af_heart") if "af_heart" in voices else 0,
-        key="chat_voice",
-    )
+    _render_chat_voice_controls()
 
     messages: list[dict[str, Any]] = st.session_state.setdefault("chat_messages", [])
     if not messages:
