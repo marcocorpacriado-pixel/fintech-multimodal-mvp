@@ -14,3 +14,7 @@ grayColor = "#94A3B8"
 font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap, Segoe UI, sans-serif"
 baseRadius = "8px"
 metricValueFontSize = "24px"
+
+[server]
+# Serves app/static/ at /app/static/ (used by the idle "session paused" page).
+enableStaticServing = true

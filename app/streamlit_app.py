@@ -46,6 +46,11 @@ from src.visualization.presentation import (  # noqa: E402
 
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
+# Idle pause: an open tab keeps Streamlit's WebSocket (and so the Cloud Run
+# instance, and its bill) alive. 0 disables it.
+IDLE_TIMEOUT_SECONDS = int(os.getenv("IDLE_TIMEOUT_SECONDS", "300"))
+IDLE_WARNING_SECONDS = 30
+PAUSED_PAGE = "app/static/paused.html"
 DEFAULT_VOICES = ["af_heart"]
 CHAT_SUGGESTIONS = (
     "What drove the change in revenue?",
@@ -931,6 +936,46 @@ def render_result(handoff: dict[str, Any]) -> None:
     render_chat_launcher(handoff)
 
 
+def idle_guard_html(timeout: int, warning: int = IDLE_WARNING_SECONDS) -> str:
+    """Client script: after ``timeout`` s without user input, leave the app.
+
+    Navigating to the static paused page closes the WebSocket, so Cloud Run
+    can scale to zero. Only real input (pointer, keys, wheel, touch) counts;
+    a banner warns ``warning`` s before and any input cancels it. Installed
+    once per page load; Streamlit reruns re-render this but do not reset it.
+    """
+
+    return f"""
+<script>
+(() => {{
+  if (window.__idleGuard) return;
+  window.__idleGuard = true;
+  const timeoutMs = {timeout * 1000}, warnMs = {warning * 1000};
+  let last = Date.now(), banner = null;
+  const hide = () => {{ if (banner) {{ banner.remove(); banner = null; }} }};
+  const touch = () => {{ last = Date.now(); hide(); }};
+  for (const evt of ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"]) {{
+    window.addEventListener(evt, touch, {{ passive: true, capture: true }});
+  }}
+  setInterval(() => {{
+    const idle = Date.now() - last;
+    if (idle >= timeoutMs) {{
+      window.location.replace("{PAUSED_PAGE}");
+    }} else if (idle >= timeoutMs - warnMs && !banner) {{
+      banner = document.createElement("div");
+      banner.setAttribute("role", "status");
+      banner.textContent = "No activity: the session will pause in {warning} seconds. Move the mouse or press a key to stay.";
+      banner.style.cssText = "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);"
+        + "z-index:2000;background:#1E293B;color:#F8FAFC;border:1px solid #F59E0B;"
+        + "border-radius:8px;padding:10px 16px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.5);";
+      document.body.appendChild(banner);
+    }}
+  }}, 1000);
+}})();
+</script>
+"""
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Financial Intelligence Copilot",
@@ -938,6 +983,9 @@ def main() -> None:
         layout="wide",
     )
     st.html(TERMINAL_CSS)  # static constant, no user data
+    if IDLE_TIMEOUT_SECONDS > 0:
+        # Static script built from int settings; no user data is interpolated.
+        st.html(idle_guard_html(IDLE_TIMEOUT_SECONDS), unsafe_allow_javascript=True)
     render_product_header()
     payload, run = render_sidebar()
 

@@ -595,3 +595,48 @@ def test_spanish_answer_falls_back_to_kokoro_even_with_groq_selected():
         language="es",
     )
     assert "Read with Local (Kokoro) · ef_dora (Groq has no Spanish voice)" in _all_text(at)
+
+
+def _idle_guard_html(timeout, warning=30):
+    tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
+    wanted = {"idle_guard_html", "PAUSED_PAGE", "IDLE_WARNING_SECONDS"}
+    nodes = [
+        node for node in tree.body
+        if (isinstance(node, ast.FunctionDef) and node.name in wanted)
+        or (isinstance(node, ast.Assign) and node.targets[0].id in wanted
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+            else False)
+    ]
+    namespace: dict = {}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "x", "exec"), namespace)
+    return namespace["idle_guard_html"](timeout, warning)
+
+
+def test_idle_guard_pauses_after_timeout_and_warns_before():
+    script = _idle_guard_html(300)
+
+    assert "timeoutMs = 300000, warnMs = 30000" in script
+    assert 'window.location.replace("app/static/paused.html")' in script
+    assert "window.__idleGuard" in script  # installed once per page load
+    for event in ("pointerdown", "keydown", "wheel", "touchstart"):
+        assert event in script
+
+
+def test_paused_page_is_served_statically_with_resume_link():
+    root = APP_PATH.parents[1]
+    page = (APP_PATH.parent / "static" / "paused.html").read_text(encoding="utf-8")
+
+    assert "enableStaticServing = true" in (root / ".streamlit" / "config.toml").read_text()
+    assert "Session paused" in page and 'href="/"' in page
+
+
+def test_idle_guard_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("IDLE_TIMEOUT_SECONDS", "0")
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+    ):
+        at = _app_test().run()
+
+    assert not at.exception
+    assert not any("__idleGuard" in str(element.proto) for element in at.get("html"))
