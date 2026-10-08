@@ -52,3 +52,29 @@ variable "github_repository" {
   description = "Repo `owner/name` autorizado a desplegar vía GitHub Actions (WIF)."
   default     = "marcocorpacriado-pixel/fintech-multimodal-mvp"
 }
+
+variable "idle_timeout_seconds" {
+  type        = number
+  description = <<-EOF
+    Segundos sin interacción tras los que la app pausa la sesión (cierra el
+    WebSocket para que Cloud Run pueda escalar a cero). 0 lo desactiva.
+    Ej.: 900 = 15 min.
+  EOF
+  default     = 300
+
+  validation {
+    condition     = var.idle_timeout_seconds >= 0 && floor(var.idle_timeout_seconds) == var.idle_timeout_seconds
+    error_message = "Debe ser un entero >= 0 (segundos)."
+  }
+}
+
+variable "idle_warning_seconds" {
+  type        = number
+  description = "Segundos de aviso antes de la pausa (como máximo la mitad del timeout)."
+  default     = 30
+
+  validation {
+    condition     = var.idle_warning_seconds >= 0 && floor(var.idle_warning_seconds) == var.idle_warning_seconds
+    error_message = "Debe ser un entero >= 0 (segundos)."
+  }
+}

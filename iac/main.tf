@@ -14,6 +14,11 @@ locals {
   # NO sobrescribirá esta imagen después: cada deploy real crea una revisión
   # nueva vía `gcloud run deploy --image=...` desde `scripts/build_and_push.sh`.
   bootstrap_image = "gcr.io/cloudrun/hello"
+
+  # vCPUs del contenedor. KOKORO_THREADS se deriva de aquí: Cloud Run gen2 no
+  # expone la cuota de CPU al proceso (os.sched_getaffinity devuelve 5-10
+  # según el host), y ONNX Runtime con más hilos que vCPUs sufre throttling.
+  cpu_count = 4
 }
 
 module "cloudrun" {
@@ -62,17 +67,20 @@ module "cloudrun" {
       }
 
       resources = {
-        cpu               = "2000m"
+        cpu               = "${local.cpu_count * 1000}m"
         memory            = "4096Mi" # Kokoro + Streamlit + FastAPI
         startup_cpu_boost = true
-        cpu_idle          = false
+        cpu_idle          = true
       }
 
       # PORT lo inyecta Cloud Run automáticamente (no se puede sobrescribir).
       envs = [
-        { name = "API_PORT",         value = "8000" },
+        { name = "API_PORT", value = "8000" },
         { name = "KOKORO_MODEL_DIR", value = "/opt/kokoro" },
         { name = "OPENROUTER_MODEL", value = var.openrouter_model },
+        { name = "KOKORO_THREADS", value = tostring(local.cpu_count) },
+        { name = "IDLE_TIMEOUT_SECONDS", value = tostring(var.idle_timeout_seconds) },
+        { name = "IDLE_WARNING_SECONDS", value = tostring(var.idle_warning_seconds) },
       ]
 
       secrets = [
