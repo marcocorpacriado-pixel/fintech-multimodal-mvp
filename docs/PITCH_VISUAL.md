@@ -2,69 +2,78 @@
 
 Guía de la interfaz para analistas y bloques listos para enlazar las capturas desde `README.md` y `BUSINESS_CASE.md`. El sistema de diseño completo está en [`DESIGN.md`](../DESIGN.md).
 
-## Cómo capturar
+Todas las capturas usan el modo DEMO (Demo Corp, datos sintéticos, 10-Q a 30 jun 2026): no contienen datos SEC reales.
 
-1. Arrancar API y UI desde la raíz (`uvicorn src.api.main:app --port 8000` y `streamlit run app/streamlit_app.py`).
-2. Ventana a 1440 px de ancho, zoom 100 %, chat flotante cerrado.
-3. Usar el mismo ticker y filing en las cuatro capturas (en modo DEMO, el badge `DEMO | SYNTHETIC` debe verse).
-4. Guardar en PNG con los nombres exactos de abajo dentro de `docs/assets/`.
+## Inventario de capturas (`docs/assets/`)
 
-| Archivo | Pestaña UI | Estado |
+| Archivo | Pestaña UI | Qué muestra |
 |---|---|---|
-| `tab1_executive_summary_audio.png` | Overview | pendiente de captura |
-| `tab2_financial_metrics_yoy.png` | Financials | pendiente de captura |
-| `tab3_drivers_xai_outlook.png` | Narrative | pendiente de captura |
-| `tab4_compliance_verification.png` | Sources | pendiente de captura |
-
-Para la captura 1, el reproductor de audio está al final de la pestaña Narrative: capturar Overview y, si se quiere mostrar el audio en la misma imagen, recortar el reproductor de Narrative.
+| `tab1_overview_snapshot.png` | Overview | Cabecera, badges DEMO / verificación, snapshot ejecutivo con 4 KPIs, señal positiva, riesgo y outlook FinBERT |
+| `tab2_financial_metrics_yoy.png` | Financials | Gráfico de valores absolutos (USD y per-share, Actual vs Anterior) y tabla canónica detallada |
+| `tab2_kpis_yoy.png` | Financials | Rejilla de las 7 KPI cards con variación YoY / YoY_YTD y valor anterior |
+| `tab2_chart_change_pct.png` | Financials | Gráfico de variación porcentual por métrica |
+| `tab3_drivers_xai_outlook.png` | Narrative | Positivos y riesgos con sección SEC, outlook con heatmap XAI de FinBERT, resumen ejecutivo y controles de audio |
+| `tab4_compliance_verification.png` | Sources | Evidencia y procedencia, verificación determinista y Copilot conversacional abierto |
 
 ## Pantallas
 
-### 1. Resumen ejecutivo y audio
+### Tab 1 — Overview
 
-Snapshot del filing en una sola vista: KPIs clave, periodo reportado, fecha de presentación y estado LIVE / DEMO en la cabecera fija. El resumen se puede escuchar vía TTS.
+![Tab 1: Executive Overview](assets/tab1_overview_snapshot.png)
+
+Snapshot del filing en una sola vista: KPIs ejecutivos (revenue, net income, EPS diluido, operating cash flow) con su variación, la señal positiva y el riesgo principal, y el outlook de gestión con polaridad y confianza FinBERT.
 **Propuesta de valor:** menos fricción cognitiva. El analista sabe en segundos si el filing merece lectura profunda, sin abrir 100+ páginas.
 
-### 2. Métricas YoY
+### Tab 2 — Financials
 
-Siete métricas canónicas extraídas de XBRL por un pipeline determinista, comparadas con el periodo anterior en barras duales (Actual vs Anterior) y cambio porcentual.
-**Propuesta de valor:** trazabilidad contable. Cada cifra viene del XBRL oficial y la UI no recalcula nada; lo que se ve es lo que la SEC publicó.
+![Tab 2: Financial Metrics YoY](assets/tab2_financial_metrics_yoy.png)
 
-### 3. Drivers y outlook XAI
+Valores absolutos en USD y por acción en barras duales (Actual vs Anterior), con la tabla canónica que indica el tipo de comparación (YoY, YoY_YTD) y los periodos exactos.
 
-Positivos y riesgos con la sección SEC de origen, más el outlook de gestión clasificado por FinBERT. La frase de evidencia muestra un heatmap de Integrated Gradients: cuanto más intensa la pill, más pesa la palabra; al pasar el cursor o enfocar con teclado aparece su impacto.
+- Vista complementaria — KPI Cards YoY:
+
+  ![Tab 2: KPI Grid Detail](assets/tab2_kpis_yoy.png)
+
+- Vista complementaria — Gráfico de variación porcentual:
+
+  ![Tab 2: YoY Change % Chart](assets/tab2_chart_change_pct.png)
+
+**Propuesta de valor:** trazabilidad contable. Las siete métricas vienen del XBRL oficial por un pipeline determinista y la UI no recalcula nada; si no hay periodo comparable, se dice ("NO COMPARABLE PERIOD") en lugar de inventarlo.
+
+### Tab 3 — Narrative
+
+![Tab 3: Drivers & XAI Outlook](assets/tab3_drivers_xai_outlook.png)
+
+Positivos y riesgos con la sección SEC de origen; outlook de gestión clasificado por FinBERT con la frase de evidencia resaltada mediante Integrated Gradients (cuanto más intensa la pill, más pesa la palabra; al pasar el cursor o enfocar con teclado aparece su impacto). Debajo, el resumen ejecutivo con selector de voz, copia y lectura en audio (Kokoro local o Groq).
 **Propuesta de valor:** explicabilidad algorítmica. El modelo no da un veredicto opaco; enseña qué palabras del filing lo han llevado a esa polaridad.
 
-### 4. Compliance y verificación
+### Tab 4 — Sources & Compliance
 
-Evidencia citada literal, resultado del verifier determinista (cada afirmación contrastada con el texto fuente) y detalles técnicos del run.
+![Tab 4: Compliance Verification & Evidence](assets/tab4_compliance_verification.png)
+
+Evidencia y procedencia de cada hallazgo, detalle de la verificación determinista (métricas, citas, números narrativos, lenguaje de recomendación y formato del resumen) y el Copilot conversacional, que responde citando la evidencia (`[O1]`) y puede leer la respuesta en voz alta.
 **Propuesta de valor:** confianza auditable. Cualquier conclusión se puede rastrear hasta el fragmento exacto del filing.
 
 ## Bloques para copiar
 
-Desde `README.md` (raíz del repo):
+Desde un archivo en la raíz del repo (`README.md`, `BUSINESS_CASE.md`):
 
 ```markdown
-### Resumen ejecutivo y audio
-![Resumen ejecutivo y audio](docs/assets/tab1_executive_summary_audio.png)
-
-### Métricas YoY
-![Métricas financieras YoY](docs/assets/tab2_financial_metrics_yoy.png)
-
-### Drivers y outlook XAI
-![Drivers y outlook con heatmap XAI de FinBERT](docs/assets/tab3_drivers_xai_outlook.png)
-
-### Compliance y verificación
-![Evidencia y verificación determinista](docs/assets/tab4_compliance_verification.png)
+![Tab 1: Executive Overview](docs/assets/tab1_overview_snapshot.png)
+![Tab 2: Financial Metrics YoY](docs/assets/tab2_financial_metrics_yoy.png)
+![Tab 2: KPI Grid Detail](docs/assets/tab2_kpis_yoy.png)
+![Tab 2: YoY Change % Chart](docs/assets/tab2_chart_change_pct.png)
+![Tab 3: Drivers & XAI Outlook](docs/assets/tab3_drivers_xai_outlook.png)
+![Tab 4: Compliance Verification & Evidence](docs/assets/tab4_compliance_verification.png)
 ```
 
-Desde un documento dentro de `docs/` (p. ej. `docs/BUSINESS_CASE.md`), las rutas pierden el prefijo `docs/`:
+Desde un archivo dentro de `docs/` las rutas pierden el prefijo `docs/`:
 
 ```markdown
-![Resumen ejecutivo y audio](assets/tab1_executive_summary_audio.png)
-![Métricas financieras YoY](assets/tab2_financial_metrics_yoy.png)
-![Drivers y outlook con heatmap XAI de FinBERT](assets/tab3_drivers_xai_outlook.png)
-![Evidencia y verificación determinista](assets/tab4_compliance_verification.png)
+![Tab 1: Executive Overview](assets/tab1_overview_snapshot.png)
+![Tab 2: Financial Metrics YoY](assets/tab2_financial_metrics_yoy.png)
+![Tab 2: KPI Grid Detail](assets/tab2_kpis_yoy.png)
+![Tab 2: YoY Change % Chart](assets/tab2_chart_change_pct.png)
+![Tab 3: Drivers & XAI Outlook](assets/tab3_drivers_xai_outlook.png)
+![Tab 4: Compliance Verification & Evidence](assets/tab4_compliance_verification.png)
 ```
-
-Si `BUSINESS_CASE.md` vive en la raíz, usar el primer bloque.
