@@ -269,14 +269,15 @@ def highlight_tokens_html(
         text = html.escape(piece)
         score = scores.get(piece.lower(), 0.0) if index % 2 else 0.0
         if score > 0:
+            # Alpha caps at 0.50 so the pale text keeps >= 4.5:1 (WCAG AA, DESIGN.md).
             # data-tooltip feeds the instant CSS tooltip (.xai-pill in the app CSS);
             # title is the native, accessible fallback; tabindex enables keyboard focus.
             impact = f"Impact: {score * 100:.1f}%"
             parts.append(
                 f'<span class="xai-pill" tabindex="0" data-tooltip="{impact}" '
                 f'title="{impact} (Integrated Gradients)" '
-                f"style=\"background: rgba({rgb}, {0.15 + score * 0.45:.2f}); "
-                f"border: 1px solid rgba({rgb}, {0.3 + score * 0.5:.2f}); "
+                f"style=\"background: rgba({rgb}, {0.15 + score * 0.35:.2f}); "
+                f"border: 1px solid rgba({rgb}, {0.3 + score * 0.4:.2f}); "
                 f"color: {text_color}; border-radius: 4px; padding: 2px 6px; "
                 f"margin: 0 2px; display: inline-block; position: relative; "
                 f'line-height: 1.4; cursor: help;">{text}</span>'
@@ -302,7 +303,7 @@ def outlook_xai_html(outlook: Mapping[str, Any]) -> str:
     blocks = [
         '<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; '
         'margin-bottom: 12px;">'
-        f'<span style="background: rgba({rgb}, 0.16); border: 1px solid rgba({rgb}, 0.6); '
+        f'<span style="background: rgba({rgb}, 0.10); border: 1px solid rgba({rgb}, 0.6); '
         f"color: rgb({rgb}); border-radius: 999px; padding: 3px 12px; font-size: 12px; "
         'font-weight: 700; letter-spacing: 0.04em;">'
         f"&#9679; POLARITY: {html.escape(sentiment.upper())}</span>"
@@ -336,7 +337,7 @@ def outlook_xai_html(outlook: Mapping[str, Any]) -> str:
                 "Low impact"
                 f'<span style="display: inline-block; width: 84px; height: 8px; '
                 f"border-radius: 4px; background: linear-gradient(90deg, "
-                f'rgba({rgb}, 0.15), rgba({rgb}, 0.6));"></span>'
+                f'rgba({rgb}, 0.15), rgba({rgb}, 0.5));"></span>'
                 "High impact · Integrated Gradients attribution · hover a word for its weight"
                 "</div>"
             )

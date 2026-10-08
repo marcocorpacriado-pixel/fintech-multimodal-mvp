@@ -10,8 +10,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 NOT_AVAILABLE = "N/A"
-CURRENT_COLOR = "#2a78d6"   # categorical slot 1 (blue)
-PREVIOUS_COLOR = "#7b8794"  # neutral comparison series
+CURRENT_COLOR = "#38BDF8"   # accent-blue token, series "Actual"
+PREVIOUS_COLOR = "#64748B"  # neutral-previous token (non-text, >= 3:1)
 CHANGE_COLOR = "#607d8b"    # neutral: direction is not investment sentiment
 UNIT_LABELS = {"usd": "USD values", "usdPerShare": "Per-share values"}
 

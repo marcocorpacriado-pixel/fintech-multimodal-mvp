@@ -237,9 +237,9 @@ def test_token_heatmap_pills_scale_with_score_and_escape_filing_text():
         "positive",
     )
 
-    assert "background: rgba(16, 185, 129, 0.60)" in html  # 0.15 + 1.0 * 0.45
-    assert "border: 1px solid rgba(16, 185, 129, 0.80)" in html
-    assert "background: rgba(16, 185, 129, 0.38)" in html  # 0.15 + 0.5 * 0.45
+    assert "background: rgba(16, 185, 129, 0.50)" in html  # 0.15 + 1.0 * 0.35, AA cap
+    assert "border: 1px solid rgba(16, 185, 129, 0.70)" in html
+    assert "background: rgba(16, 185, 129, 0.32)" in html  # 0.15 + 0.5 * 0.35
     assert 'title="Impact: 50.0% (Integrated Gradients)"' in html
     assert ">Demand</span>" in html and ">Continued</span>" in html
     assert "<script>" not in html and "&lt;script&gt;" in html
@@ -249,7 +249,7 @@ def test_token_heatmap_pills_scale_with_score_and_escape_filing_text():
 def test_token_heatmap_uses_crimson_for_negative_sentiment():
     html = highlight_tokens_html("Demand fell.", [{"token": "fell", "score": 0.5}], "negative")
 
-    assert "rgba(239, 68, 68, 0.38)" in html and "color: #FFF5F5" in html
+    assert "rgba(239, 68, 68, 0.32)" in html and "color: #FFF5F5" in html
 
 
 def _scored_outlook(**overrides):
