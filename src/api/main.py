@@ -19,9 +19,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.audio import list_voices
+from src.audio import (
+    DEFAULT_GROQ_VOICE,
+    GROQ_VOICES,
+    detect_speech_language,
+    list_voices,
+    normalize_for_speech,
+    synthesize_groq,
+)
 from src.audio.stt import MAX_FILE_SIZE_MB, transcribe
-from src.audio.tts import language_for_voice, synthesize
+from src.audio.tts import DEFAULT_VOICE_BY_LANG, language_for_voice, synthesize
 from src.extraction import (
     AnalysisPipelineResult,
     OpenRouterChatClient,
@@ -98,9 +105,15 @@ class FilingMetadataResponse(StrictModel):
     accession: str
 
 
+TTSProvider = Literal["local", "groq"]
+
+
 class AudioSummaryRequest(StrictModel):
     text: str = Field(min_length=1, max_length=5000)
     voice: str | None = DEFAULT_VOICE
+    # "local" = Kokoro on this container (EN/ES); "groq" = Orpheus on Groq
+    # (faster, English only).
+    provider: TTSProvider = "local"
     # Kokoro language; when omitted it is derived from the voice prefix so a
     # Spanish voice (ef_*) is not pronounced with English phonemes.
     language: str | None = None
@@ -252,7 +265,9 @@ def filings(
 
 
 @app.get("/api/v1/audio/voices", response_model=VoicesResponse)
-def voices() -> dict:
+def voices(provider: TTSProvider = "local") -> dict:
+    if provider == "groq":
+        return {"voices": GROQ_VOICES}
     # First call loads (and may download) the Kokoro model.
     try:
         return {"voices": list_voices()}
@@ -292,10 +307,16 @@ def analysis(request: AnalysisRequest):
     responses={200: {"content": {"audio/wav": {}}}, **_ERROR_RESPONSES},
 )
 def audio_summary(request: AudioSummaryRequest):
-    # Sync def: FastAPI runs it in the threadpool, so Kokoro never blocks the loop.
-    language = request.language or language_for_voice(request.voice)
+    # Sync def: FastAPI runs it in the threadpool, so TTS never blocks the loop.
+    provider, voice, language = _route_speech(request)
     try:
-        result = synthesize(text=request.text, voice=request.voice, language=language)
+        text = normalize_for_speech(
+            request.text, "es" if language.startswith("es") else "en"
+        )
+        if provider == "groq":
+            result = synthesize_groq(text, voice=voice)
+        else:
+            result = synthesize(text=text, voice=voice, language=language)
     except (ValueError, AssertionError):  # Kokoro asserts on unknown voices
         return _error_response(
             IntegrationError(
@@ -305,7 +326,7 @@ def audio_summary(request: AudioSummaryRequest):
             )
         )
     except Exception:
-        logger.exception("synthesize failed")
+        logger.exception("synthesize failed provider=%s", request.provider)
         return JSONResponse(
             status_code=503,
             content={
@@ -316,7 +337,33 @@ def audio_summary(request: AudioSummaryRequest):
                 ).model_dump()
             },
         )
-    return Response(content=result.audio_bytes, media_type="audio/wav")
+    return Response(
+        content=result.audio_bytes,
+        media_type="audio/wav",
+        # Lets the UI say which engine/voice actually read the text.
+        headers={"X-TTS-Provider": provider, "X-TTS-Voice": voice or ""},
+    )
+
+
+def _route_speech(request: AudioSummaryRequest) -> tuple[str, str | None, str]:
+    """Pick engine, voice and Kokoro language from the text's language.
+
+    Groq Orpheus is English-only, so Spanish text always goes to Kokoro. A
+    voice from the other language is replaced by that language's default.
+    """
+
+    voice_language = "es" if language_for_voice(request.voice).startswith("es") else "en"
+    detected = detect_speech_language(request.text, default=voice_language)
+    language = request.language or ("es" if detected == "es" else "en-us")
+    spanish = language.startswith("es")
+    if request.provider == "groq" and not spanish:
+        return "groq", request.voice or DEFAULT_GROQ_VOICE, language
+    voice = request.voice
+    if voice is None or voice in GROQ_VOICES or (
+        language_for_voice(voice).startswith("es") != spanish
+    ):
+        voice = DEFAULT_VOICE_BY_LANG["es" if spanish else "en-us"]
+    return "local", voice, language
 
 
 @app.post(
