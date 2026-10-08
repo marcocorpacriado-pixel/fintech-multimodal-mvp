@@ -54,7 +54,13 @@ CHAT_SUGGESTIONS = (
 )
 # Default Kokoro voice for a transcribed question language (prefix = language).
 CHAT_VOICE_BY_LANGUAGE = {"es": "ef_dora", "en": "af_heart"}
-CHAT_STATE_KEYS = ("chat_messages", "chat_audio", "chat_error", "chat_pending")
+CHAT_STATE_KEYS = (
+    "chat_messages",
+    "chat_audio",
+    "chat_error",
+    "chat_pending",
+    "chat_open",
+)
 SENTIMENT_COLORS = {
     "positive": "green",
     "negative": "red",
@@ -101,6 +107,26 @@ TERMINAL_CSS = """
     white-space: nowrap; z-index: 1000; pointer-events: none;
 }
 .xai-pill:focus-visible { outline: 2px solid #38BDF8; outline-offset: 1px; }
+/* Floating chat launcher, bottom-right, shown only once a report exists. */
+.st-key-chat_fab {
+    position: fixed; bottom: 1.75rem; right: 1.75rem; z-index: 1000; width: auto;
+}
+.st-key-chat_fab button { box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); border-radius: 999px; }
+/* Chat panel: fixed, narrow and translucent (not a modal) so the analysis
+   stays visible and usable behind it while the user checks the answers. */
+.st-key-chat_panel {
+    position: fixed; top: 4.5rem; right: 1rem; bottom: 1rem; z-index: 1000;
+    width: min(420px, calc(100vw - 2rem));
+    padding: 0.75rem 1rem; overflow-y: auto;
+    background: rgba(11, 15, 25, 0.8);
+    backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+    border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    transition: background 0.15s ease;
+}
+.st-key-chat_panel:hover, .st-key-chat_panel:focus-within {
+    background: rgba(11, 15, 25, 0.9);
+}
 </style>
 """
 
@@ -635,9 +661,13 @@ def _transcribe_question(audio: Any) -> str | None:
 
 
 def _chat_markdown(text: str) -> str:
-    """Escape untrusted text (no LaTeX from "$") but keep its line breaks."""
+    """Render model Markdown (bold, lists) safely.
 
-    return md_escape(text).replace("\n", "  \n")
+    Only "$" is escaped so amounts like $1.2B never become LaTeX; raw HTML is
+    already ignored by ``st.markdown`` without ``unsafe_allow_html``.
+    """
+
+    return text.replace("$", "\\$")
 
 
 def _render_chat_message(index: int, message: dict[str, Any], handoff: dict[str, Any]) -> None:
@@ -672,9 +702,11 @@ def _render_chat_message(index: int, message: dict[str, Any], handoff: dict[str,
 
 
 def render_chat(handoff: dict[str, Any]) -> None:
-    """Conversational Q&A grounded only in the displayed analysis."""
+    """Conversational Q&A grounded only in the displayed analysis.
 
-    st.subheader("Ask about this filing")
+    Rendered inside the floating ``chat_panel`` container.
+    """
+
     if handoff["pipeline_metadata"]["analysis_mode"] == "demo":
         st.caption("Chat uses the configured LLM over the synthetic demo analysis.")
     else:
@@ -694,12 +726,11 @@ def render_chat(handoff: dict[str, Any]) -> None:
 
     messages: list[dict[str, Any]] = st.session_state.setdefault("chat_messages", [])
     if not messages:
-        columns = st.columns(len(CHAT_SUGGESTIONS))
-        for column, suggestion in zip(columns, CHAT_SUGGESTIONS):
-            if column.button(suggestion, width="stretch"):
+        for suggestion in CHAT_SUGGESTIONS:
+            if st.button(suggestion, width="stretch", type="tertiary"):
                 st.session_state.chat_pending = suggestion
 
-    history = st.container(height=520 if messages else "content", border=False)
+    history = st.container(height=380 if messages else "content", border=False)
     with history:
         for index, message in enumerate(messages):
             _render_chat_message(index, message, handoff)
@@ -739,6 +770,55 @@ def render_chat(handoff: dict[str, Any]) -> None:
         code = str(error.get("code") or "UNKNOWN_ERROR")
         st.error(f"The assistant could not answer ({code}).")
         st.caption(error_presentation(code).title + " You can ask again.")
+
+
+# On wide screens, push the report left so panel and analysis sit side by side.
+CHAT_OPEN_CSS = """
+<style>
+@media (min-width: 1100px) {
+    [data-testid="stMainBlockContainer"] { padding-right: 460px; }
+}
+</style>
+"""
+
+
+def _set_chat_open(value: bool) -> None:
+    st.session_state.chat_open = value
+
+
+def render_chat_launcher(handoff: dict[str, Any]) -> None:
+    """Floating button that toggles a fixed side panel with the chat.
+
+    The panel is a keyed container positioned with CSS, not a modal: the
+    report behind it stays visible and interactive. The open state lives in
+    session state so it survives the reruns triggered by the chat widgets.
+    """
+
+    if not st.session_state.get("chat_open"):
+        with st.container(key="chat_fab"):
+            st.button(
+                "Ask about this filing",
+                icon=":material/forum:",
+                type="primary",
+                on_click=_set_chat_open,
+                args=(True,),
+            )
+        return
+
+    st.html(CHAT_OPEN_CSS)  # static constant, no user data
+    with st.container(key="chat_panel"):
+        title, close = st.columns([5, 1], vertical_alignment="center")
+        title.markdown("**:material/forum: Ask about this filing**")
+        close.button(
+            "",
+            icon=":material/close:",
+            help="Close chat",
+            key="chat_close",
+            type="tertiary",
+            on_click=_set_chat_open,
+            args=(False,),
+        )
+        render_chat(handoff)
 
 
 def execute_analysis(payload: dict[str, Any]) -> None:
@@ -785,15 +865,14 @@ def render_result(handoff: dict[str, Any]) -> None:
         render_technical_details(handoff)
         return
 
-    overview, financials, narrative, sources, ask = st.tabs(
+    overview, financials, narrative, sources = st.tabs(
         [
             ":material/dashboard: Overview",
             ":material/monitoring: Financials",
             ":material/article: Narrative",
             ":material/verified_user: Sources",
-            ":material/forum: Ask",
         ],
-        # Keyed + rerun so the active tab survives reruns triggered by the chat.
+        # Keyed so the active tab survives reruns (e.g. closing the chat panel).
         key="result_tabs",
         on_change="rerun",
     )
@@ -809,8 +888,7 @@ def render_result(handoff: dict[str, Any]) -> None:
         render_sources(handoff)
         render_verification_details(handoff["verification"])
         render_technical_details(handoff)
-    with ask:
-        render_chat(handoff)
+    render_chat_launcher(handoff)
 
 
 def main() -> None:
