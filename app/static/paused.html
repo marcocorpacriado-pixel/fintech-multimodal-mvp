@@ -27,9 +27,18 @@
 <body>
 <main>
   <h1>Session paused</h1>
-  <p>The app was paused after 5 minutes without activity, so the server can
-     shut down and stop billing. Your previous analysis is not kept.</p>
+  <p>The app was paused after <span id="idle">a period</span> without activity,
+     so the server can shut down and stop billing. Your previous analysis is
+     not kept.</p>
   <a href="/">Resume</a>
 </main>
+<script>
+  // Idle window passed by the app (?minutes=N); only digits are accepted.
+  const minutes = new URLSearchParams(location.search).get("minutes");
+  if (minutes && /^\d{1,4}$/.test(minutes)) {
+    document.getElementById("idle").textContent =
+      minutes === "1" ? "1 minute" : `${minutes} minutes`;
+  }
+</script>
 </body>
 </html>

@@ -48,8 +48,16 @@ from src.visualization.presentation import (  # noqa: E402
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 # Idle pause: an open tab keeps Streamlit's WebSocket (and so the Cloud Run
 # instance, and its bill) alive. 0 disables it.
-IDLE_TIMEOUT_SECONDS = int(os.getenv("IDLE_TIMEOUT_SECONDS", "300"))
-IDLE_WARNING_SECONDS = 30
+def _env_seconds(name: str, default: int) -> int:
+    """Non-negative int from the environment; invalid values fall back."""
+
+    value = os.getenv(name, "").strip()
+    return int(value) if value.isdigit() else default
+
+
+# Configurable per deployment (Cloud Run env vars, see iac/main.tf).
+IDLE_TIMEOUT_SECONDS = _env_seconds("IDLE_TIMEOUT_SECONDS", 300)
+IDLE_WARNING_SECONDS = _env_seconds("IDLE_WARNING_SECONDS", 30)
 PAUSED_PAGE = "app/static/paused.html"
 DEFAULT_VOICES = ["af_heart"]
 CHAT_SUGGESTIONS = (
@@ -945,6 +953,9 @@ def idle_guard_html(timeout: int, warning: int = IDLE_WARNING_SECONDS) -> str:
     once per page load; Streamlit reruns re-render this but do not reset it.
     """
 
+    # The warning can never cover more than half the idle window.
+    warning = min(warning, timeout // 2)
+    paused_url = f"{PAUSED_PAGE}?minutes={max(1, round(timeout / 60))}"
     return f"""
 <script>
 (() => {{
@@ -960,7 +971,7 @@ def idle_guard_html(timeout: int, warning: int = IDLE_WARNING_SECONDS) -> str:
   setInterval(() => {{
     const idle = Date.now() - last;
     if (idle >= timeoutMs) {{
-      window.location.replace("{PAUSED_PAGE}");
+      window.location.replace("{paused_url}");
     }} else if (idle >= timeoutMs - warnMs && !banner) {{
       banner = document.createElement("div");
       banner.setAttribute("role", "status");

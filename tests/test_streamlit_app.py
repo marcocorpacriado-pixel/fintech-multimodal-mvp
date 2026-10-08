@@ -597,9 +597,15 @@ def test_spanish_answer_falls_back_to_kokoro_even_with_groq_selected():
     assert "Read with Local (Kokoro) · ef_dora (Groq has no Spanish voice)" in _all_text(at)
 
 
-def _idle_guard_html(timeout, warning=30):
+def _idle_namespace() -> dict:
     tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
-    wanted = {"idle_guard_html", "PAUSED_PAGE", "IDLE_WARNING_SECONDS"}
+    wanted = {
+        "_env_seconds",
+        "idle_guard_html",
+        "PAUSED_PAGE",
+        "IDLE_TIMEOUT_SECONDS",
+        "IDLE_WARNING_SECONDS",
+    }
     nodes = [
         node for node in tree.body
         if (isinstance(node, ast.FunctionDef) and node.name in wanted)
@@ -607,16 +613,20 @@ def _idle_guard_html(timeout, warning=30):
             if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
             else False)
     ]
-    namespace: dict = {}
+    namespace: dict = {"os": __import__("os")}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "x", "exec"), namespace)
-    return namespace["idle_guard_html"](timeout, warning)
+    return namespace
+
+
+def _idle_guard_html(timeout, warning=30):
+    return _idle_namespace()["idle_guard_html"](timeout, warning)
 
 
 def test_idle_guard_pauses_after_timeout_and_warns_before():
     script = _idle_guard_html(300)
 
     assert "timeoutMs = 300000, warnMs = 30000" in script
-    assert 'window.location.replace("app/static/paused.html")' in script
+    assert 'window.location.replace("app/static/paused.html?minutes=5")' in script
     assert "window.__idleGuard" in script  # installed once per page load
     for event in ("pointerdown", "keydown", "wheel", "touchstart"):
         assert event in script
@@ -640,3 +650,28 @@ def test_idle_guard_can_be_disabled(monkeypatch):
 
     assert not at.exception
     assert not any("__idleGuard" in str(element.proto) for element in at.get("html"))
+
+
+def test_idle_timeout_and_warning_come_from_environment(monkeypatch):
+    monkeypatch.setenv("IDLE_TIMEOUT_SECONDS", "900")
+    monkeypatch.setenv("IDLE_WARNING_SECONDS", "60")
+    namespace = _idle_namespace()
+
+    assert namespace["IDLE_TIMEOUT_SECONDS"] == 900
+    assert namespace["IDLE_WARNING_SECONDS"] == 60
+    script = namespace["idle_guard_html"](900, 60)
+    assert "timeoutMs = 900000, warnMs = 60000" in script
+    assert "paused.html?minutes=15" in script
+
+
+def test_invalid_idle_settings_fall_back_to_defaults(monkeypatch):
+    monkeypatch.setenv("IDLE_TIMEOUT_SECONDS", "15min")
+    monkeypatch.setenv("IDLE_WARNING_SECONDS", "-5")
+    namespace = _idle_namespace()
+
+    assert namespace["IDLE_TIMEOUT_SECONDS"] == 300
+    assert namespace["IDLE_WARNING_SECONDS"] == 30
+
+
+def test_warning_never_exceeds_half_the_idle_window():
+    assert "timeoutMs = 40000, warnMs = 20000" in _idle_guard_html(40, 30)
