@@ -6,7 +6,9 @@ This module only orchestrates and serializes. Financial values come from the
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import date
@@ -27,6 +29,16 @@ from src.audio import (
     normalize_for_speech,
     synthesize_groq,
 )
+from src.api.inference_costs import (
+    GROQ_STT_USD_PER_HOUR,
+    GROQ_TTS_USD_PER_MILLION_CHARS,
+    cloud_run_hourly_cost,
+    cloud_run_memory_gib,
+    cloud_run_vcpu,
+    cpu_time_cost,
+    groq_stt_cost,
+    groq_tts_cost,
+)
 from src.audio.stt import MAX_FILE_SIZE_MB, transcribe
 from src.audio.tts import DEFAULT_VOICE_BY_LANG, language_for_voice, synthesize
 from src.extraction import (
@@ -45,6 +57,7 @@ from src.integration import (
     AnalysisHandoff,
     AnalysisMode,
     ChatRequest,
+    InferenceMetricsDTO,
     IntegrationError,
     build_analysis_handoff,
     build_chat_context,
@@ -61,6 +74,9 @@ MAX_TRANSCRIBE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 # Fixed, non-revealing marker appended when the provider fails mid-stream:
 # the 200 status is already committed, so the error cannot be a JSON body.
 STREAM_INTERRUPTED_MARKER = "\n\n[stream interrupted]"
+# ASCII Record Separator: never produced by the model, so the UI can split the
+# answer from the JSON metrics trailer sent after the last token.
+CHAT_METRICS_SEPARATOR = "\x1e"
 _ERROR_STATUS = {
     "INPUT_ERROR": 422,
     "FILING_NOT_FOUND": 404,
@@ -122,6 +138,9 @@ class AudioSummaryRequest(StrictModel):
 class TranscriptionResponse(StrictModel):
     text: str
     language: str
+    latency_ms: float | None = None
+    audio_seconds: float | None = None
+    cost_usd: float | None = None
 
 
 class HealthResponse(StrictModel):
@@ -165,6 +184,46 @@ def _run_demo_analysis() -> AnalysisHandoff:
     return build_analysis_handoff(result, analysis_mode="demo", provider="fixture")
 
 
+class _UsageMeter:
+    """LLM client proxy that adds up latency, tokens and cost of every call.
+
+    The pipeline may call the model twice (initial + one repair); the analysis
+    cost is the sum. Usage comes from OpenRouter's response (``last_usage``).
+    """
+
+    def __init__(self, client: OpenRouterLLMClient) -> None:
+        self._client = client
+        self.model = client.model
+        self.calls = 0
+        self.llm_seconds = 0.0
+        self.prompt_tokens: int | None = None
+        self.completion_tokens: int | None = None
+        self.cost_usd: float | None = None
+
+    def generate_structured(self, *, system_prompt: str, user_prompt: str):
+        started = time.perf_counter()
+        try:
+            return self._client.generate_structured(
+                system_prompt=system_prompt, user_prompt=user_prompt
+            )
+        finally:
+            self.calls += 1
+            self.llm_seconds += time.perf_counter() - started
+            usage = self._client.last_usage
+            if usage is not None:
+                self.prompt_tokens = _add(self.prompt_tokens, usage.prompt_tokens)
+                self.completion_tokens = _add(
+                    self.completion_tokens, usage.completion_tokens
+                )
+                self.cost_usd = _add(self.cost_usd, usage.cost)
+
+
+def _add(total, value):
+    if value is None:
+        return total
+    return value if total is None else total + value
+
+
 def _run_real_analysis(
     request: AnalysisRequest,
     *,
@@ -175,13 +234,16 @@ def _run_real_analysis(
     if request.filing_date is None:  # guarded by AnalysisRequest validation
         raise AssertionError("real analysis requires filing_date")
 
+    started = time.perf_counter()
     inputs = prepare_sec_analysis_inputs(
         ticker=request.ticker,
         filing_date=request.filing_date,
         form=request.filing_type,
     )
+    sec_seconds = time.perf_counter() - started
     try:
-        with OpenRouterLLMClient.from_env() as llm:
+        with OpenRouterLLMClient.from_env() as client:
+            llm = _UsageMeter(client)
             result = run_analysis_pipeline(
                 filing_path=inputs.filing_path,
                 company=inputs.company,
@@ -201,12 +263,28 @@ def _run_real_analysis(
                 result.repair_used,
                 result.first_failure_category or "none",
             )
-            return build_analysis_handoff(
+            handoff = build_analysis_handoff(
                 result,
                 analysis_mode="real",
                 provider="openrouter",
                 model=llm.model,
                 filing_date=inputs.filing_date,
+            )
+            metrics = InferenceMetricsDTO(
+                total_ms=(time.perf_counter() - started) * 1000,
+                sec_ingestion_ms=sec_seconds * 1000,
+                llm_ms=llm.llm_seconds * 1000,
+                llm_calls=llm.calls,
+                prompt_tokens=llm.prompt_tokens,
+                completion_tokens=llm.completion_tokens,
+                cost_usd=llm.cost_usd,
+            )
+            return handoff.model_copy(
+                update={
+                    "pipeline_metadata": handoff.pipeline_metadata.model_copy(
+                        update={"metrics": metrics}
+                    )
+                }
             )
     except Exception as error:
         diagnostic = diagnose_integration_failure(error)
@@ -264,6 +342,22 @@ def filings(
     ]
 
 
+@app.get("/api/v1/pricing")
+def pricing() -> dict:
+    """Unit prices behind the Performance tab (the LLM cost comes per call)."""
+
+    return {
+        "cloud_run": {
+            "vcpu": cloud_run_vcpu(),
+            "memory_gib": cloud_run_memory_gib(),
+            "usd_per_hour": cloud_run_hourly_cost(),
+        },
+        "groq_tts_usd_per_million_chars": GROQ_TTS_USD_PER_MILLION_CHARS,
+        "groq_stt_usd_per_hour": GROQ_STT_USD_PER_HOUR,
+        "llm": "OpenRouter reports the exact charged cost of every call",
+    }
+
+
 @app.get("/api/v1/audio/voices", response_model=VoicesResponse)
 def voices(provider: TTSProvider = "local") -> dict:
     if provider == "groq":
@@ -309,12 +403,24 @@ def analysis(request: AnalysisRequest):
 def audio_summary(request: AudioSummaryRequest):
     # Sync def: FastAPI runs it in the threadpool, so TTS never blocks the loop.
     provider, voice, language = _route_speech(request)
+    fallback = ""
+    started = time.perf_counter()
     try:
         text = normalize_for_speech(
             request.text, "es" if language.startswith("es") else "en"
         )
         if provider == "groq":
-            result = synthesize_groq(text, voice=voice)
+            try:
+                result = synthesize_groq(text, voice=voice)
+            except ValueError:
+                raise
+            except Exception as error:
+                # Groq's free tier caps Orpheus at a few thousand characters
+                # per day (429). Read it locally rather than failing the click.
+                logger.warning("groq tts unavailable, using kokoro: %s", type(error).__name__)
+                provider, voice, fallback = "local", DEFAULT_VOICE_BY_LANG["en-us"], "groq_unavailable"
+                started = time.perf_counter()
+                result = synthesize(text=text, voice=voice, language=language)
         else:
             result = synthesize(text=text, voice=voice, language=language)
     except (ValueError, AssertionError):  # Kokoro asserts on unknown voices
@@ -337,11 +443,24 @@ def audio_summary(request: AudioSummaryRequest):
                 ).model_dump()
             },
         )
+    seconds = time.perf_counter() - started
+    # Groq bills per character; Kokoro runs on this instance, so its cost is
+    # the instance price for the seconds it was busy (an estimate).
+    cost = groq_tts_cost(len(text)) if provider == "groq" else cpu_time_cost(seconds)
+    audio_seconds = getattr(result, "duration", None)
     return Response(
         content=result.audio_bytes,
         media_type="audio/wav",
-        # Lets the UI say which engine/voice actually read the text.
-        headers={"X-TTS-Provider": provider, "X-TTS-Voice": voice or ""},
+        # Engine/voice actually used plus metrics for the Performance tab.
+        headers={
+            "X-TTS-Provider": provider,
+            "X-TTS-Voice": voice or "",
+            "X-TTS-Duration-Ms": f"{seconds * 1000:.1f}",
+            "X-TTS-Audio-Seconds": "" if audio_seconds is None else f"{audio_seconds:.2f}",
+            "X-TTS-Chars": str(len(text)),
+            "X-TTS-Cost-USD": f"{cost:.8f}",
+            "X-TTS-Fallback": fallback,
+        },
     )
 
 
@@ -384,6 +503,7 @@ def audio_transcribe(
                 retryable=False,
             )
         )
+    started = time.perf_counter()
     try:
         result = transcribe(audio)
     except ValueError:
@@ -406,7 +526,33 @@ def audio_transcribe(
                 ).model_dump()
             },
         )
-    return {"text": result.text, "language": result.language}
+    audio_seconds = getattr(result, "duration", None) or None
+    return {
+        "text": result.text,
+        "language": result.language,
+        "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+        "audio_seconds": audio_seconds,
+        "cost_usd": groq_stt_cost(audio_seconds or 0.0),
+    }
+
+
+def _chat_metrics(stream: object, model: str | None) -> dict:
+    """Server-side timings plus OpenRouter's reported usage for one chat turn."""
+
+    usage = getattr(stream, "usage", None)
+
+    def millis(name: str) -> float | None:
+        value = getattr(stream, name, None)
+        return None if value is None else round(value * 1000, 1)
+
+    return {
+        "model": model,
+        "ttft_ms": millis("first_token_s"),
+        "total_ms": millis("total_s"),
+        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None),
+        "cost_usd": getattr(usage, "cost", None),
+    }
 
 
 @app.post(
@@ -430,7 +576,8 @@ def chat(request: ChatRequest):
         f"{CHAT_SYSTEM_PROMPT}\n{build_chat_context(request.handoff)}"
     )
     try:
-        stream = OpenRouterChatClient.from_env().open(
+        client = OpenRouterChatClient.from_env()
+        stream = client.open(
             system_prompt=system_prompt,
             messages=[message.model_dump() for message in request.messages],
         )
@@ -447,6 +594,9 @@ def chat(request: ChatRequest):
     def tokens() -> Iterator[str]:
         try:
             yield from stream
+            yield CHAT_METRICS_SEPARATOR + json.dumps(
+                {"metrics": _chat_metrics(stream, getattr(client, "model", None))}
+            )
         except Exception as error:
             diagnostic = diagnose_integration_failure(error)
             logger.warning(

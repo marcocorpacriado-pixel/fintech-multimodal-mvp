@@ -23,6 +23,7 @@ import httpx
 
 from .openrouter_client import (
     DEFAULT_MAX_RETRIES,
+    LLMUsage,
     DEFAULT_OPENROUTER_BASE_URL,
     DEFAULT_TIMEOUT_SECONDS,
     TRANSIENT_STATUS_CODES,
@@ -30,6 +31,7 @@ from .openrouter_client import (
     LLMTransportError,
     _parse_float_setting,
     _parse_int_setting,
+    _parse_usage,
     _required_secret,
     _required_text,
     _validate_base_url,
@@ -42,11 +44,26 @@ DEFAULT_CHAT_MAX_TOKENS = 1024
 
 
 class ChatStream:
-    """Iterator of text deltas bound to one open HTTP response."""
+    """Iterator of text deltas bound to one open HTTP response.
 
-    def __init__(self, client: httpx.Client, response: httpx.Response) -> None:
+    After iteration, ``usage`` holds OpenRouter's token/cost accounting (sent
+    in the final SSE chunk) and ``first_token_s`` / ``total_s`` the timings
+    measured from ``open()``.
+    """
+
+    def __init__(
+        self,
+        client: httpx.Client,
+        response: httpx.Response,
+        *,
+        started: float | None = None,
+    ) -> None:
         self._client = client
         self._response = response
+        self._started = time.perf_counter() if started is None else started
+        self.usage: LLMUsage | None = None
+        self.first_token_s: float | None = None
+        self.total_s: float | None = None
 
     def __iter__(self) -> Iterator[str]:
         try:
@@ -57,14 +74,19 @@ class ChatStream:
                 data = line[len("data:"):].strip()
                 if data == "[DONE]":
                     return
-                delta = _parse_delta(data)
+                delta, usage = _parse_event(data)
+                if usage is not None:
+                    self.usage = usage
                 if delta:
+                    if self.first_token_s is None:
+                        self.first_token_s = time.perf_counter() - self._started
                     yield delta
         except httpx.TimeoutException as error:
             raise LLMTransportError("OpenRouter stream timed out") from error
         except httpx.HTTPError as error:
             raise LLMTransportError("OpenRouter stream was interrupted") from error
         finally:
+            self.total_s = time.perf_counter() - self._started
             self.close()
 
     def close(self) -> None:
@@ -150,6 +172,7 @@ class OpenRouterChatClient:
             "Accept": "text/event-stream",
         }
         attempts = self.max_retries + 1
+        started = time.perf_counter()
         client = httpx.Client(transport=self._http_transport, timeout=self.timeout_seconds)
         try:
             for attempt in range(attempts):
@@ -174,7 +197,7 @@ class OpenRouterChatClient:
                     ) from error
 
                 if 200 <= response.status_code < 300:
-                    return ChatStream(client, response)
+                    return ChatStream(client, response, started=started)
                 response.close()
                 if (
                     response.status_code in TRANSIENT_STATUS_CODES
@@ -216,7 +239,7 @@ class OpenRouterChatClient:
         self._sleep(0.25 * (2**attempt))
 
 
-def _parse_delta(data: str) -> str:
+def _parse_event(data: str) -> tuple[str, LLMUsage | None]:
     try:
         event = json.loads(data)
     except json.JSONDecodeError as error:
@@ -226,10 +249,11 @@ def _parse_delta(data: str) -> str:
     if event.get("error") is not None:
         # Mid-stream provider failure; the body is never surfaced to clients.
         raise LLMResponseError("OpenRouter reported an error mid-stream")
+    usage = _parse_usage(event.get("usage"))
     choices = event.get("choices")
     if not isinstance(choices, list) or not choices:
-        return ""
+        return "", usage
     choice = choices[0]
     delta = choice.get("delta") if isinstance(choice, Mapping) else None
     content = delta.get("content") if isinstance(delta, Mapping) else None
-    return content if isinstance(content, str) else ""
+    return (content if isinstance(content, str) else ""), usage

@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -322,7 +323,9 @@ def test_chat_streams_answer_grounded_in_handoff_context():
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain")
-    assert response.text == "Cash fell [R1]."
+    answer, separator, trailer = response.text.partition(api_main.CHAT_METRICS_SEPARATOR)
+    assert answer == "Cash fell [R1]."
+    assert separator and json.loads(trailer)["metrics"]["ttft_ms"] is None
     risk = api_main._run_demo_analysis().risks[0].finding
     assert f"[R1] {risk}" in fake.kwargs["system_prompt"]
     assert fake.kwargs["messages"] == [{"role": "user", "content": "Main risks?"}]
@@ -381,7 +384,7 @@ def test_chat_error_mid_stream_appends_fixed_marker(caplog):
 
 
 def test_transcribe_returns_text_and_language():
-    fake = SimpleNamespace(text="¿Cuáles son los riesgos?", language="es")
+    fake = SimpleNamespace(text="¿Cuáles son los riesgos?", language="es", duration=3.0)
     with patch("src.api.main.transcribe", return_value=fake) as mock_stt:
         response = client.post(
             "/api/v1/audio/transcribe",
@@ -390,7 +393,12 @@ def test_transcribe_returns_text_and_language():
         )
 
     assert response.status_code == 200
-    assert response.json() == {"text": "¿Cuáles son los riesgos?", "language": "es"}
+    body = response.json()
+    assert (body["text"], body["language"]) == ("¿Cuáles son los riesgos?", "es")
+    assert body["audio_seconds"] == 3.0
+    assert body["latency_ms"] >= 0
+    # Groq bills a 10 s minimum at $0.04/hour.
+    assert body["cost_usd"] == pytest.approx(10 / 3600 * 0.04)
     mock_stt.assert_called_once_with(b"RIFFaudio")
 
 
@@ -468,7 +476,7 @@ def test_audio_summary_groq_failure_is_safe_503():
     with patch(
         "src.api.main.synthesize_groq",
         side_effect=RuntimeError("model_terms_required gsk_SECRET"),
-    ):
+    ), patch("src.api.main.synthesize", side_effect=RuntimeError("kokoro down")):
         response = client.post(
             "/api/v1/audio/summary",
             json={"text": "Hi", "voice": "troy", "provider": "groq"},
@@ -518,3 +526,136 @@ def test_english_text_with_spanish_voice_uses_english_voice():
     kokoro.assert_called_once_with(
         text="Revenue rose and cash fell.", voice="af_heart", language="en-us"
     )
+
+
+def test_real_analysis_reports_summed_llm_usage_cost_and_latency():
+    result = api_main.AnalysisPipelineResult.model_validate_json(
+        api_main.DEMO_FIXTURE_PATH.read_text(encoding="utf-8")
+    )
+    prepared = SimpleNamespace(
+        filing_path="filing.txt", company="Demo Corp", ticker="DEMO",
+        filing_date=date(2026, 7, 31), report_period=result.analysis.period,
+        filing_type="10-Q", current_accession="x", current_filing=object(),
+        previous_filing=object(),
+    )
+    usages = iter([
+        SimpleNamespace(prompt_tokens=1000, completion_tokens=200, cost=0.01),
+        SimpleNamespace(prompt_tokens=1100, completion_tokens=250, cost=0.012),
+    ])
+
+    class FakeClient:
+        model = "test/model"
+        last_usage = None
+
+        def generate_structured(self, **_):
+            self.last_usage = next(usages)
+            return {}
+
+    context = MagicMock()
+    context.__enter__.return_value = FakeClient()
+
+    def pipeline(**kwargs):  # initial generation + one repair
+        kwargs["llm_client"].generate_structured(system_prompt="s", user_prompt="u")
+        kwargs["llm_client"].generate_structured(system_prompt="s", user_prompt="u")
+        return result
+
+    request = api_main.AnalysisRequest(
+        ticker="DEMO", filing_date=date(2026, 7, 31), mode="real"
+    )
+    with (
+        patch("src.api.main.prepare_sec_analysis_inputs", return_value=prepared),
+        patch("src.api.main.OpenRouterLLMClient.from_env", return_value=context),
+        patch("src.api.main.run_analysis_pipeline", side_effect=pipeline),
+    ):
+        handoff = api_main._run_real_analysis(request)
+
+    metrics = handoff.pipeline_metadata.metrics
+    assert metrics.llm_calls == 2
+    assert (metrics.prompt_tokens, metrics.completion_tokens) == (2100, 450)
+    assert metrics.cost_usd == pytest.approx(0.022)
+    assert metrics.total_ms >= metrics.llm_ms >= 0
+
+
+def test_demo_analysis_has_no_inference_metrics():
+    body = client.post("/api/v1/analysis", json={"ticker": "AAPL", "mode": "demo"}).json()
+
+    assert body["pipeline_metadata"]["metrics"] is None
+
+
+def test_chat_trailer_carries_openrouter_usage_and_timings():
+    class Stream:
+        usage = SimpleNamespace(prompt_tokens=900, completion_tokens=80, cost=0.0042)
+        first_token_s = 0.8
+        total_s = 2.5
+
+        def __iter__(self):
+            yield "Revenue rose [M1]."
+
+    fake = _FakeChat([])
+    fake.open = lambda **_: Stream()
+    fake.model = "test/model"
+    with patch("src.api.main.OpenRouterChatClient.from_env", return_value=fake):
+        response = client.post("/api/v1/chat", json=_chat_payload())
+
+    answer, _, trailer = response.text.partition(api_main.CHAT_METRICS_SEPARATOR)
+    assert answer == "Revenue rose [M1]."
+    assert json.loads(trailer)["metrics"] == {
+        "model": "test/model", "ttft_ms": 800.0, "total_ms": 2500.0,
+        "prompt_tokens": 900, "completion_tokens": 80, "cost_usd": 0.0042,
+    }
+
+
+def test_chat_error_mid_stream_sends_no_metrics_trailer():
+    def tokens():
+        yield "Partial "
+        raise LLMTransportError("down")
+
+    with patch("src.api.main.OpenRouterChatClient.from_env", return_value=_FakeChat(tokens())):
+        response = client.post("/api/v1/chat", json=_chat_payload())
+
+    assert api_main.CHAT_METRICS_SEPARATOR not in response.text
+
+
+def test_tts_headers_report_groq_cost_and_kokoro_estimate():
+    fake = SimpleNamespace(audio_bytes=b"RIFF", duration=1.5)
+    with patch("src.api.main.synthesize_groq", return_value=fake):
+        groq = client.post(
+            "/api/v1/audio/summary",
+            json={"text": "Revenue rose.", "voice": "troy", "provider": "groq"},
+        )
+    with patch("src.api.main.synthesize", return_value=fake):
+        local = client.post("/api/v1/audio/summary", json={"text": "Revenue rose."})
+
+    assert groq.headers["X-TTS-Chars"] == "13"
+    assert float(groq.headers["X-TTS-Cost-USD"]) == pytest.approx(13 * 22 / 1_000_000)
+    assert groq.headers["X-TTS-Audio-Seconds"] == "1.50"
+    assert float(local.headers["X-TTS-Duration-Ms"]) >= 0
+    assert float(local.headers["X-TTS-Cost-USD"]) >= 0
+
+
+def test_pricing_endpoint_uses_service_size_from_env(monkeypatch):
+    monkeypatch.setenv("CLOUD_RUN_VCPU", "2")
+    monkeypatch.setenv("CLOUD_RUN_MEMORY_GIB", "4")
+
+    body = client.get("/api/v1/pricing").json()
+
+    assert body["cloud_run"]["vcpu"] == 2
+    assert body["cloud_run"]["usd_per_hour"] == pytest.approx((2 * 0.000018 + 4 * 0.000002) * 3600)
+
+
+def test_groq_failure_falls_back_to_kokoro():
+    fake = SimpleNamespace(audio_bytes=b"RIFF-kokoro", duration=1.0)
+    with (
+        patch("src.api.main.synthesize_groq", side_effect=RuntimeError("429 TPD limit")),
+        patch("src.api.main.synthesize", return_value=fake) as kokoro,
+    ):
+        response = client.post(
+            "/api/v1/audio/summary",
+            json={"text": "Revenue rose.", "voice": "troy", "provider": "groq"},
+        )
+
+    assert response.status_code == 200
+    assert response.content == b"RIFF-kokoro"
+    assert response.headers["X-TTS-Provider"] == "local"
+    assert response.headers["X-TTS-Fallback"] == "groq_unavailable"
+    kokoro.assert_called_once_with(text="Revenue rose.", voice="af_heart", language="en-us")

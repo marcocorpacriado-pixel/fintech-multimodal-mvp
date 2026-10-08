@@ -103,6 +103,22 @@ class VerificationDTO(IntegrationSchema):
         return self
 
 
+class InferenceMetricsDTO(IntegrationSchema):
+    """Measured latency and provider cost of one analysis run.
+
+    Filled by the API for real analyses (``None`` for the demo fixture). The
+    cost is the amount OpenRouter reports as charged, not an estimate.
+    """
+
+    total_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    sec_ingestion_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    llm_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    llm_calls: int = Field(default=0, ge=0)
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
 class PipelineMetadataDTO(IntegrationSchema):
     """Compact execution metadata, excluding prompts and source documents."""
 
@@ -118,6 +134,7 @@ class PipelineMetadataDTO(IntegrationSchema):
     first_failure_category: (
         Literal["GROUNDING_ERROR", "VERIFICATION_ERROR"] | None
     ) = None
+    metrics: InferenceMetricsDTO | None = None
 
     @model_validator(mode="after")
     def validate_retrieval_metadata(self) -> Self:
@@ -241,6 +258,7 @@ __all__ = [
     "AnalysisHandoff",
     "AnalysisMetricDTO",
     "AnalysisMode",
+    "InferenceMetricsDTO",
     "ManagementOutlookDTO",
     "TokenAttributionDTO",
     "PipelineMetadataDTO",

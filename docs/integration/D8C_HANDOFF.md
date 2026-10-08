@@ -252,3 +252,28 @@ never re-reads the filing, XBRL or retrieval output.
 Citation tags, abstention, and recommendation blocking in chat are enforced by
 the prompt. Unlike the core filing analysis, chat does not yet have a
 deterministic post-generation citation verifier.
+
+## Inference metrics (Performance tab)
+
+The UI keeps a per-session log of every inference with its latency and cost.
+The API supplies the measurements:
+
+- **Analysis:** `pipeline_metadata.metrics` (`InferenceMetricsDTO`, `null` for the
+  demo fixture): `total_ms`, `sec_ingestion_ms`, `llm_ms`, `llm_calls`,
+  `prompt_tokens`, `completion_tokens` and `cost_usd`. The figures add up every LLM
+  call, including the repair. The cost is the amount OpenRouter reports as charged
+  (`usage.cost`).
+- **Chat:** after the last token, the stream ends with a trailer:
+  `"\x1e" + {"metrics": {model, ttft_ms, total_ms, prompt_tokens,
+  completion_tokens, cost_usd}}`. The value `\x1e` is the ASCII Record Separator.
+  Clients must split on it and never display the trailer. A mid-stream failure
+  sends the `[stream interrupted]` marker and no trailer.
+- **TTS:** response headers `X-TTS-Duration-Ms`, `X-TTS-Audio-Seconds`,
+  `X-TTS-Chars` and `X-TTS-Cost-USD`. Groq's cost uses its price per character.
+  Kokoro runs on the instance, so its cost is an estimate: busy seconds × the
+  Cloud Run price.
+- **STT:** `/api/v1/audio/transcribe` adds `latency_ms`, `audio_seconds` and
+  `cost_usd`. Groq bills a 10 s minimum.
+- **`GET /api/v1/pricing`:** returns the unit prices
+  (`src/api/inference_costs.py`) and the cost per hour of the Cloud Run instance,
+  sized from `CLOUD_RUN_VCPU` / `CLOUD_RUN_MEMORY_GIB`.
