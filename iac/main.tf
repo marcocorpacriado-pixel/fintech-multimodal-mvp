@@ -18,7 +18,8 @@ locals {
   # vCPUs del contenedor. KOKORO_THREADS se deriva de aquí: Cloud Run gen2 no
   # expone la cuota de CPU al proceso (os.sched_getaffinity devuelve 5-10
   # según el host), y ONNX Runtime con más hilos que vCPUs sufre throttling.
-  cpu_count = 4
+  cpu_count  = 4
+  memory_gib = 4
 }
 
 module "cloudrun" {
@@ -68,7 +69,7 @@ module "cloudrun" {
 
       resources = {
         cpu               = "${local.cpu_count * 1000}m"
-        memory            = "4096Mi" # Kokoro + Streamlit + FastAPI
+        memory            = "${local.memory_gib * 1024}Mi" # Kokoro + Streamlit + FastAPI
         startup_cpu_boost = true
         cpu_idle          = true
       }
@@ -81,6 +82,9 @@ module "cloudrun" {
         { name = "KOKORO_THREADS", value = tostring(local.cpu_count) },
         { name = "IDLE_TIMEOUT_SECONDS", value = tostring(var.idle_timeout_seconds) },
         { name = "IDLE_WARNING_SECONDS", value = tostring(var.idle_warning_seconds) },
+        # Service size, used to cost Cloud Run time in the Performance tab.
+        { name = "CLOUD_RUN_VCPU", value = tostring(local.cpu_count) },
+        { name = "CLOUD_RUN_MEMORY_GIB", value = tostring(local.memory_gib) },
       ]
 
       secrets = [

@@ -112,3 +112,16 @@ def test_from_env_requires_key_and_model():
         OpenRouterChatClient.from_env(environ={"OPENROUTER_MODEL": "m"})
     with pytest.raises(LLMConfigurationError):
         OpenRouterChatClient.from_env(environ={"OPENROUTER_API_KEY": "k"})
+
+
+def test_stream_captures_usage_from_final_chunk_and_timings():
+    final = {"choices": [], "usage": {"prompt_tokens": 50, "completion_tokens": 7, "total_tokens": 57, "cost": 0.0003}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=_sse(_delta("Hi"), final))
+
+    stream = _client(handler).open(system_prompt="S", messages=[])
+    assert list(stream) == ["Hi"]
+
+    assert stream.usage.prompt_tokens == 50 and stream.usage.cost == 0.0003
+    assert 0 <= stream.first_token_s <= stream.total_s

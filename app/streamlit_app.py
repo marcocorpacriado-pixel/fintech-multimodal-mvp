@@ -7,6 +7,7 @@ recalculates financial metrics.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -28,6 +29,16 @@ from src.visualization.financial_charts import (  # noqa: E402
     format_value,
     render_metrics_change_chart,
     render_metrics_comparison_chart,
+)
+from src.visualization.performance import (  # noqa: E402
+    average_costs,
+    event_rows,
+    format_ms,
+    format_usd,
+    latency_chart,
+    latency_rows,
+    project_monthly_cost,
+    summarize,
 )
 from src.visualization.presentation import (  # noqa: E402
     cited_sources,
@@ -67,6 +78,8 @@ CHAT_SUGGESTIONS = (
 )
 # Chat TTS engines: Kokoro on the container (EN/ES) or Groq Orpheus (fast, EN).
 CHAT_TTS_PROVIDERS = {"local": "Local (Kokoro)", "groq": "Groq (fast)"}
+CHAT_METRICS_SEPARATOR = "\x1e"  # API trailer: answer text | JSON metrics
+PERF_STATE_KEYS = ("perf_events", "chat_last_metrics")
 CHAT_STATE_KEYS = (
     "chat_messages",
     "chat_audio",
@@ -542,6 +555,7 @@ def render_summary(handoff: dict[str, Any]) -> None:
         if st.button("Copy summary", width="stretch"):
             st.session_state.summary_copy_ready = True
         if st.button("Listen to summary", width="stretch"):
+            started = time.perf_counter()
             with st.spinner("Generating summary audio"):
                 response, error = api_request(
                     "POST",
@@ -550,6 +564,9 @@ def render_summary(handoff: dict[str, Any]) -> None:
                     timeout=300,
                 )
             if response is not None:
+                record_tts_event(
+                    response, (time.perf_counter() - started) * 1000, "Executive summary"
+                )
                 st.session_state.audio = response.content
                 st.session_state.audio_mode = handoff["pipeline_metadata"][
                     "analysis_mode"
@@ -628,13 +645,51 @@ def render_technical_details(handoff: dict[str, Any]) -> None:
         )
 
 
+def record_perf_event(kind: str, **fields: Any) -> None:
+    """Append one inference to the session log shown in the Performance tab."""
+
+    event = {"kind": kind, "time": time.strftime("%H:%M:%S"), **fields}
+    st.session_state.setdefault("perf_events", []).append(event)
+
+
+def _header_float(response: httpx.Response, name: str) -> float | None:
+    try:
+        return float(response.headers.get(name, ""))
+    except ValueError:
+        return None
+
+
+def record_tts_event(response: httpx.Response, latency_ms: float, label: str) -> None:
+    provider = response.headers.get("X-TTS-Provider", "local")
+    audio_seconds = _header_float(response, "X-TTS-Audio-Seconds")
+    chars = response.headers.get("X-TTS-Chars", "")
+    units = f"{chars} chars" + (f" → {audio_seconds:.1f} s audio" if audio_seconds else "")
+    if response.headers.get("X-TTS-Fallback") == "groq_unavailable":
+        label += " · Groq unavailable → Kokoro"
+    record_perf_event(
+        "tts",
+        label=label,
+        provider=f"{CHAT_TTS_PROVIDERS.get(provider, provider)} · "
+        f"{response.headers.get('X-TTS-Voice', '')}",
+        latency_ms=latency_ms,
+        units=units,
+        cost_usd=_header_float(response, "X-TTS-Cost-USD"),
+        estimated=provider != "groq",
+    )
+
+
 def _stream_chat_answer(payload: dict[str, Any]) -> Iterator[str]:
     """Yield answer text from the streaming chat endpoint.
 
     Errors are stored in session state instead of raised so ``st.write_stream``
-    simply ends and the caller can render safe guidance.
+    simply ends and the caller can render safe guidance. The JSON metrics
+    trailer after ``CHAT_METRICS_SEPARATOR`` is never yielded; it is stored,
+    with the client-side timings, in ``chat_last_metrics``.
     """
 
+    started = time.perf_counter()
+    first_token: float | None = None
+    trailer: list[str] = []
     try:
         with httpx.stream(
             "POST",
@@ -646,7 +701,25 @@ def _stream_chat_answer(payload: dict[str, Any]) -> Iterator[str]:
                 response.read()
                 st.session_state.chat_error = parse_api_error(response)
                 return
-            yield from response.iter_text()
+            for chunk in response.iter_text():
+                if trailer:
+                    trailer.append(chunk)
+                    continue
+                text, separator, rest = chunk.partition(CHAT_METRICS_SEPARATOR)
+                if separator:
+                    trailer.append(rest)
+                if text:
+                    first_token = first_token or time.perf_counter() - started
+                    yield text
+        try:
+            server = json.loads("".join(trailer))["metrics"] if trailer else {}
+        except (ValueError, KeyError, TypeError):
+            server = {}
+        st.session_state.chat_last_metrics = {
+            **server,
+            "client_ttft_ms": None if first_token is None else first_token * 1000,
+            "client_total_ms": (time.perf_counter() - started) * 1000,
+        }
     except httpx.HTTPError:
         st.session_state.chat_error = {
             "code": "API_UNAVAILABLE",
@@ -659,6 +732,7 @@ def _stream_chat_answer(payload: dict[str, Any]) -> Iterator[str]:
 def _transcribe_question(audio: Any) -> str | None:
     """Send a recorded question to the STT endpoint; return its text."""
 
+    started = time.perf_counter()
     with st.spinner("Transcribing question"):
         response, error = api_request(
             "POST",
@@ -671,6 +745,16 @@ def _transcribe_question(audio: Any) -> str | None:
         st.session_state.chat_error = error
         return None
     body = response.json()
+    audio_seconds = body.get("audio_seconds")
+    record_perf_event(
+        "stt",
+        label=f"Voice question ({body.get('language', '?')})",
+        provider="Groq · whisper-large-v3-turbo",
+        latency_ms=(time.perf_counter() - started) * 1000,
+        units=f"{audio_seconds:.1f} s audio" if audio_seconds else "",
+        cost_usd=body.get("cost_usd"),
+        estimated=False,
+    )
     return str(body.get("text") or "").strip() or None
 
 
@@ -705,6 +789,7 @@ def _render_chat_message(index: int, message: dict[str, Any], handoff: dict[str,
             st.audio(cached["audio"], format="audio/wav")
             st.caption(cached["note"])
         elif st.button("Listen", key=f"chat_tts_{index}", icon=":material/volume_up:"):
+            started = time.perf_counter()
             with st.spinner(f"Generating audio with {CHAT_TTS_PROVIDERS[provider]}"):
                 response, error = api_request(
                     "POST",
@@ -717,11 +802,16 @@ def _render_chat_message(index: int, message: dict[str, Any], handoff: dict[str,
                     timeout=300,
                 )
             if response is not None:
+                record_tts_event(
+                    response, (time.perf_counter() - started) * 1000, "Chat answer audio"
+                )
                 used = response.headers.get("X-TTS-Provider", provider)
                 note = f"Read with {CHAT_TTS_PROVIDERS.get(used, used)}"
                 if response.headers.get("X-TTS-Voice"):
                     note += f" · {response.headers['X-TTS-Voice']}"
-                if used != provider:
+                if response.headers.get("X-TTS-Fallback") == "groq_unavailable":
+                    note += " (Groq unavailable, e.g. free-tier daily limit)"
+                elif used != provider:
                     note += " (Groq has no Spanish voice)"
                 audio_cache[cache_key] = {"audio": response.content, "note": note}
                 st.rerun()
@@ -813,6 +903,18 @@ def render_chat(handoff: dict[str, Any]) -> None:
                 st.write_stream(escaped_stream())
         answer = "".join(raw_chunks)
         if answer.strip():
+            metrics = st.session_state.pop("chat_last_metrics", {})
+            tokens = (metrics.get("prompt_tokens"), metrics.get("completion_tokens"))
+            record_perf_event(
+                "chat",
+                label=question[:60],
+                provider=f"OpenRouter · {metrics.get('model') or 'LLM'}",
+                latency_ms=metrics.get("client_total_ms"),
+                ttft_ms=metrics.get("client_ttft_ms"),
+                units=f"{tokens[0]} in / {tokens[1]} out tokens" if all(tokens) else "",
+                cost_usd=metrics.get("cost_usd"),
+                estimated=False,
+            )
             messages.append({"role": "assistant", "content": answer})
             st.rerun()
         else:
@@ -874,6 +976,109 @@ def render_chat_launcher(handoff: dict[str, Any]) -> None:
         render_chat(handoff)
 
 
+def record_analysis_event(handoff: dict[str, Any], latency_ms: float) -> None:
+    meta = handoff["pipeline_metadata"]
+    label = f"{handoff['ticker']} {handoff['filing_type']} {handoff['period']}"
+    if meta["analysis_mode"] == "demo":
+        record_perf_event(
+            "analysis", label=f"{label} (demo fixture, no inference)",
+            # No cost: the fixture is not an inference and must not lower the
+            # measured average used by the viability projection.
+            provider="fixture", latency_ms=latency_ms, units="—",
+            cost_usd=None, estimated=False,
+        )
+        return
+    metrics = meta.get("metrics") or {}
+    tokens = (metrics.get("prompt_tokens"), metrics.get("completion_tokens"))
+    parts = [f"{metrics.get('llm_calls', 0)} LLM call(s)"]
+    if all(tokens):
+        parts.append(f"{tokens[0]:,} in / {tokens[1]:,} out tokens")
+    if metrics.get("sec_ingestion_ms") is not None:
+        parts.append(f"SEC {format_ms(metrics['sec_ingestion_ms'])}")
+    if metrics.get("llm_ms") is not None:
+        parts.append(f"LLM {format_ms(metrics['llm_ms'])}")
+    record_perf_event(
+        "analysis", label=label, provider=f"OpenRouter · {meta.get('model') or 'LLM'}",
+        latency_ms=latency_ms, units=" · ".join(parts),
+        cost_usd=metrics.get("cost_usd"), estimated=False,
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_pricing() -> dict[str, Any]:
+    response, _ = api_request("GET", "/api/v1/pricing", timeout=10)
+    try:
+        return response.json() if response is not None else {}
+    except ValueError:
+        return {}
+
+
+def render_performance() -> None:
+    """Measured latency and cost of every inference in this session."""
+
+    events: list[dict[str, Any]] = st.session_state.get("perf_events", [])
+    st.subheader("Inference latency and cost")
+    st.caption(
+        "Measured live in this session: the analysis, every chat answer, audio "
+        "and voice question. LLM costs are the amounts OpenRouter reports as "
+        "charged; Groq costs use its published prices; Kokoro (on-instance) is "
+        "an estimate from busy CPU time."
+    )
+    summary = summarize(events)
+    total, count, ttft, tts = st.columns(4)
+    total.metric("Session cost", format_usd(summary["total_cost_usd"]), help="Inference cost")
+    count.metric("Inferences", summary["count"])
+    ttft.metric("Chat 1st token", format_ms(summary["median_chat_ttft_ms"]), help="Median")
+    tts.metric("TTS latency", format_ms(summary["median_tts_ms"]), help="Median")
+
+    st.markdown("**Latency vs. targets for a fluid experience**")
+    st.dataframe(pd.DataFrame(latency_rows(events)), hide_index=True, width="stretch")
+
+    if events:
+        st.plotly_chart(latency_chart(events), width="stretch")
+        st.markdown("**Inference log**")
+        st.dataframe(pd.DataFrame(event_rows(events)), hide_index=True, width="stretch")
+    else:
+        st.info("Run an analysis or ask the chat to start measuring.")
+
+    render_viability_projection(events)
+
+
+def render_viability_projection(events: list[dict[str, Any]]) -> None:
+    st.markdown("**Viability projection**")
+    pricing = fetch_pricing()
+    cloud_run = pricing.get("cloud_run") or {}
+    hourly = float(cloud_run.get("usd_per_hour") or 0.288)
+    sessions = st.slider("Sessions per month", 100, 10_000, 1_000, step=100)
+    turns_col, audio_col, voice_col, minutes_col = st.columns(4)
+    turns = turns_col.number_input("Chat turns / session", 0, 50, 5)
+    audios = audio_col.number_input("Audio plays / session", 0, 50, 2)
+    voices = voice_col.number_input("Voice questions / session", 0, 50, 1)
+    minutes = minutes_col.number_input("Minutes / session", 1, 120, 10)
+    projection = project_monthly_cost(
+        events,
+        sessions_per_month=int(sessions),
+        chat_turns=int(turns),
+        audio_plays=int(audios),
+        voice_questions=int(voices),
+        session_minutes=float(minutes),
+        instance_usd_per_hour=hourly,
+    )
+    per_session, inference, infra, monthly = st.columns(4)
+    per_session.metric("Cost per session", format_usd(projection["per_session"]))
+    inference.metric("Monthly APIs", format_usd(projection["monthly_inference"]))
+    infra.metric("Monthly infra", format_usd(projection["monthly_infra"]))
+    monthly.metric("Monthly total", format_usd(projection["monthly_total"]))
+    assumed = [kind for kind, (_, measured) in average_costs(events).items() if not measured]
+    st.caption(
+        f"Cloud Run instance: {cloud_run.get('vcpu', 4):g} vCPU / "
+        f"{cloud_run.get('memory_gib', 4):g} GiB ≈ {format_usd(hourly)}/hour while a "
+        "session is open (idle sessions pause after the configured timeout so it can "
+        "scale to zero). Per-kind costs are this session's averages"
+        + (f"; not measured yet, using defaults: {', '.join(assumed)}." if assumed else ".")
+    )
+
+
 def execute_analysis(payload: dict[str, Any]) -> None:
     """Run one request with a neutral, honest loading state."""
 
@@ -884,6 +1089,7 @@ def execute_analysis(payload: dict[str, Any]) -> None:
         "analysis_error",
         "summary_copy_ready",
         *CHAT_STATE_KEYS,
+        *PERF_STATE_KEYS,
     ):
         st.session_state.pop(key, None)
     st.session_state.last_request = payload
@@ -900,6 +1106,7 @@ def execute_analysis(payload: dict[str, Any]) -> None:
     if response is not None:
         st.session_state.handoff = response.json()
         st.caption(f"Analysis completed in {elapsed:.1f}s.")
+        record_analysis_event(st.session_state.handoff, elapsed * 1000)
     else:
         st.session_state.analysis_error = error
         st.caption(f"Analysis stopped after {elapsed:.1f}s.")
@@ -918,12 +1125,13 @@ def render_result(handoff: dict[str, Any]) -> None:
         render_technical_details(handoff)
         return
 
-    overview, financials, narrative, sources = st.tabs(
+    overview, financials, narrative, sources, performance = st.tabs(
         [
             ":material/dashboard: Overview",
             ":material/monitoring: Financials",
             ":material/article: Narrative",
             ":material/verified_user: Sources",
+            ":material/speed: Performance",
         ],
         # Keyed so the active tab survives reruns (e.g. closing the chat panel).
         key="result_tabs",
@@ -941,6 +1149,8 @@ def render_result(handoff: dict[str, Any]) -> None:
         render_sources(handoff)
         render_verification_details(handoff["verification"])
         render_technical_details(handoff)
+    with performance:
+        render_performance()
     render_chat_launcher(handoff)
 
 

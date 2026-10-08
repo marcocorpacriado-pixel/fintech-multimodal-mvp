@@ -100,6 +100,29 @@ def _all_text(at: AppTest) -> str:
     )
 
 
+PERFORMANCE_METRICS = {
+    "Session cost",
+    "Inferences",
+    "Chat 1st token",
+    "TTS latency",
+    "Cost per session",
+    "Monthly APIs",
+    "Monthly infra",
+    "Monthly total",
+}
+
+
+def _report_metrics(at: AppTest):
+    return [metric for metric in at.metric if metric.label not in PERFORMANCE_METRICS]
+
+
+def _technical_details(at: AppTest) -> dict:
+    table = next(
+        frame.value for frame in at.dataframe if list(frame.value.columns) == ["Field", "Value"]
+    )
+    return dict(table.itertuples(index=False, name=None))
+
+
 def _button(at: AppTest, label: str):
     return next(button for button in at.button if button.label == label)
 
@@ -130,12 +153,12 @@ def test_demo_analysis_renders_professional_dashboard():
     assert "Key evidence detected · FinBERT 94.6%" in outlook_html
     assert 'title="Impact: 94.0% (Integrated Gradients)"' in outlook_html
     assert ">growth</span>" in outlook_html and "Low impact" in outlook_html
-    assert len(at.metric) == 11  # 4-metric snapshot plus the 7-metric financial grid
-    assert at.metric[0].value == "$1.25B"
+    assert len(_report_metrics(at)) == 11  # 4-metric snapshot plus the 7-metric grid
+    assert _report_metrics(at)[0].value == "$1.25B"
     assert "N/A" in text
     assert any("Item 2 · Management Discussion & Analysis" in e.label for e in at.expander)
     assert any(expander.label == "Technical details" for expander in at.expander)
-    technical = dict(at.dataframe[-1].value.itertuples(index=False, name=None))
+    technical = _technical_details(at)
     assert technical["Analysis mode"] == "demo"
     assert technical["Provider"] == "fixture"
     assert technical["Generation attempts"] == "1"
@@ -202,7 +225,7 @@ def test_real_mode_uses_discovered_filing_and_separates_dates():
     assert "Report period: Jun 27, 2026" in text
     assert "Filed: Jul 31, 2026" in text
     assert "VERIFIED" in text
-    technical = dict(at.dataframe[-1].value.itertuples(index=False, name=None))
+    technical = _technical_details(at)
     assert technical["Provider"] == "openrouter"
     assert technical["Model"] == "deepseek/deepseek-v4-flash"
     assert technical["Retrieved evidence chunks"] == str(
@@ -362,6 +385,7 @@ def test_results_use_layered_information_architecture_and_snapshot():
         ":material/monitoring: Financials",
         ":material/article: Narrative",
         ":material/verified_user: Sources",
+        ":material/speed: Performance",
     ]
     assert "Executive snapshot" in _all_text(at)
     assert [metric.label for metric in at.metric[:4]] == [
@@ -383,7 +407,7 @@ def test_change_chart_is_default_and_values_view_is_available():
     chart_radio = next(radio for radio in at.radio if radio.label == "Financial chart")
     assert chart_radio.value == "Change %"
     assert chart_radio.options == ["Change %", "Values"]
-    assert len(at.get("plotly_chart")) == 1
+    assert len(at.get("plotly_chart")) == 2  # financial chart + performance latency chart
 
     chart_radio.set_value("Values").run()
     assert not at.exception
@@ -675,3 +699,57 @@ def test_invalid_idle_settings_fall_back_to_defaults(monkeypatch):
 
 def test_warning_never_exceeds_half_the_idle_window():
     assert "timeoutMs = 40000, warnMs = 20000" in _idle_guard_html(40, 30)
+
+
+def test_performance_tab_logs_chat_turn_live_and_hides_trailer():
+    class Stream:
+        usage = SimpleNamespace(prompt_tokens=900, completion_tokens=80, cost=0.0042)
+        first_token_s = 0.5
+        total_s = 1.0
+
+        def __iter__(self):
+            yield "Revenue rose [M1]."
+
+    fake = _FakeChatClient([])
+    fake.open = lambda **_: Stream()
+    fake.model = "test/model"
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("httpx.stream", side_effect=_stream_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+        patch("src.api.main.OpenRouterChatClient.from_env", return_value=fake),
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+        assert [e["kind"] for e in at.session_state["perf_events"]] == ["analysis"]
+        _button(at, "Ask about this filing").click().run()
+        at.chat_input[0].set_value("Revenue?").run()
+
+    assert not at.exception
+    events = at.session_state["perf_events"]
+    assert [e["kind"] for e in events] == ["analysis", "chat"]
+    chat = events[-1]
+    assert chat["cost_usd"] == 0.0042
+    assert chat["units"] == "900 in / 80 out tokens"
+    assert chat["provider"] == "OpenRouter · test/model"
+    assert at.session_state["chat_messages"][-1]["content"] == "Revenue rose [M1]."
+    assert "\x1e" not in _all_text(at)
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Inferences"] == "2"
+    assert metrics["Session cost"] == "$0.0042"
+
+
+def test_new_analysis_resets_performance_log():
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+        _button(at, "Analyze filing").click().run()
+
+    assert not at.exception
+    assert len(at.session_state["perf_events"]) == 1
+    event = at.session_state["perf_events"][0]
+    assert "demo fixture, no inference" in event["label"]
+    assert event["cost_usd"] is None  # never counted as a measured analysis cost
