@@ -362,7 +362,6 @@ def test_results_use_layered_information_architecture_and_snapshot():
         ":material/monitoring: Financials",
         ":material/article: Narrative",
         ":material/verified_user: Sources",
-        ":material/forum: Ask",
     ]
     assert "Executive snapshot" in _all_text(at)
     assert [metric.label for metric in at.metric[:4]] == [
@@ -450,6 +449,7 @@ def test_chat_streams_grounded_answer_with_cited_sources():
     ):
         at = _app_test().run()
         _button(at, "Analyze filing").click().run()
+        _button(at, "Ask about this filing").click().run()
         at.chat_input[0].set_value("How did revenue change?").run()
 
     assert not at.exception
@@ -475,6 +475,7 @@ def test_chat_provider_error_is_safe_and_history_stays_answerable():
     ):
         at = _app_test().run()
         _button(at, "Analyze filing").click().run()
+        _button(at, "Ask about this filing").click().run()
         at.chat_input[0].set_value("Main risks?").run()
 
     assert not at.exception
@@ -494,9 +495,47 @@ def test_new_analysis_clears_chat_history():
     ):
         at = _app_test().run()
         _button(at, "Analyze filing").click().run()
+        _button(at, "Ask about this filing").click().run()
         at.chat_input[0].set_value("Summarize").run()
         assert len(at.session_state["chat_messages"]) == 2
         _button(at, "Analyze filing").click().run()
 
     assert not at.exception
-    assert at.session_state["chat_messages"] == []
+    assert "chat_messages" not in at.session_state
+    assert not at.chat_input  # the panel closes with the old report
+
+
+def test_chat_is_a_floating_launcher_not_a_tab():
+    with (
+        patch("httpx.request", side_effect=_route_to_test_client),
+        patch("src.api.main.list_voices", return_value=["af_heart"]),
+    ):
+        at = _app_test().run()
+        _button(at, "Analyze filing").click().run()
+        assert not at.chat_input  # closed until the launcher is used
+        _button(at, "Ask about this filing").click().run()
+
+        assert not at.exception
+        assert len(at.chat_input) == 1
+        assert all("Ask" not in tab.label for tab in at.tabs)
+        # Panel is not a modal: the report keeps rendering behind it.
+        assert "Executive snapshot" in _all_text(at)
+        at.button(key="chat_close").click().run()
+
+    assert not at.exception
+    assert not at.chat_input
+    assert any(button.label == "Ask about this filing" for button in at.button)
+
+
+def test_chat_markdown_keeps_formatting_but_blocks_latex():
+    tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
+    source = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_chat_markdown"
+    )
+    namespace: dict = {}
+    exec(compile(ast.Module(body=[source], type_ignores=[]), "x", "exec"), namespace)
+
+    assert namespace["_chat_markdown"]("**Risks:** cash $830M to $910M") == (
+        "**Risks:** cash \\$830M to \\$910M"
+    )
