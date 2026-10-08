@@ -1,11 +1,19 @@
 # Final integration checklist
 
+> **Historical integration record.** This checklist preserves the original
+> merge evidence from `integration/final-mvp`. The current `main` product has
+> since added R11/R12 hardening, deterministic evidence reconstruction,
+> FinBERT/Integrated Gradients, filing chat, voice input, Docker, and Cloud Run.
+> Current validation: **613 passed, 4 skipped, 0 failed, 4 warnings**. The four
+> skips require `torch`, which was absent only from the audited local
+> environment; it is declared in `requirements.txt` and installed in Docker.
+
 Este checklist se ejecutará en una rama de integración dedicada. No autoriza
 merges automáticos ni cambios en las ramas remotas de otros miembros.
 
 Leyenda: `[x]` PASS (verificado en `integration/final-mvp`); `[x]` con nota
 «caveat» = PASS WITH PROVIDER CAVEAT; `[ ]` = NOT EXECUTED / FUTURE WORK.
-Última verificación: hardening final, 2026-10-06 (394 passed, 4 warnings).
+Verificación histórica de esta integración: hardening final, 2026-10-06.
 
 ## Dani — extraction and analysis
 
@@ -14,7 +22,7 @@ Leyenda: `[x]` PASS (verificado en `integration/final-mvp`); `[x]` con nota
 - [x] Tests locales verdes antes de D9A.
 - [ ] D8C/D9A revisados por el equipo.
 - [ ] D8C/D9A committed y pushed cuando Dani lo autorice.
-- [x] Tests verdes en la rama de integración final. — PASS: 394 passed
+- [x] Tests verdes en la rama de integración final. — PASS en el checkpoint histórico; revalidación actual: 613 passed, 4 skipped, 0 failed
 
 ## Cristian — audio
 
@@ -22,11 +30,12 @@ Leyenda: `[x]` PASS (verificado en `integration/final-mvp`); `[x]` con nota
 - [ ] Rama de audio actualizada y pushed.
 - [ ] Decidir y documentar el destino de `transcripccion_16abril.txt`.
 - [x] Excluir cualquier transcript personal o no destinado al repositorio. — PASS: `transcripccion_*.txt` en `.gitignore`, ninguno versionado
-- [ ] Decidir si `scripts/dev_api.py` se publica o permanece fuera de integración.
+- [x] Usar exclusivamente la API oficial en `src/api/`; no existe ni se requiere `scripts/dev_api.py`.
 - [x] Reconciliar dependencias Groq/Kokoro/soundfile/python-dotenv. — PASS: declaradas; `pip check` limpio
-- [ ] Añadir o acordar tests automatizados mínimos de contratos de audio.
-- [ ] Ejecutar smoke STT con audio pequeño. — NOT EXECUTED: `GROQ_API_KEY` ausente; STT no forma parte del pipeline
+- [x] Añadir tests automatizados de los contratos HTTP de audio. — PASS: cubiertos en `tests/test_api.py`
+- [ ] Ejecutar smoke STT real con audio pequeño. — NOT EXECUTED en el checkpoint histórico; actualmente STT alimenta filing chat, no el pipeline de earnings calls
 - [x] Ejecutar smoke TTS y comprobar WAV resultante. — PASS: `POST /api/v1/audio/summary` devolvió `audio/wav` válido (RIFF/WAVE, 24 kHz, mono) con Kokoro local
+- [x] Integrar proveedor Groq TTS opcional para inglés sin sustituir Kokoro. — PASS contractual con mocks; coste/latencia y smoke real pendientes
 - [ ] Comprobar el límite de 25 MB y el comportamiento del primer warm-up. — NOT EXECUTED: el modelo Kokoro ya estaba en caché; no se midió descarga en frío
 
 ## Marco — API, UI and visualization
@@ -50,12 +59,12 @@ Leyenda: `[x]` PASS (verificado en `integration/final-mvp`); `[x]` con nota
 - [x] Merge de la rama publicada de Marco. — PASS: ef553a2
 - [x] Resolver `requirements.txt` sin perder pins o dependencias. — PASS
 - [x] Verificar `.gitignore` para datos, `.env`, modelos, audio y transcripts. — PASS
-- [x] Ejecutar `python -m pytest -q` con todos los módulos. — PASS: 394 passed, 4 warnings
+- [x] Ejecutar `python -m pytest -q` con todos los módulos. — Estado actual: 613 passed, 4 skipped, 0 failed, 4 warnings
 - [x] Ejecutar `python -m compileall src app` — PASS
 - [ ] Ejecutar el lint oficial si Marco o la rama integrada lo configura. — NOT EXECUTED: no hay lint configurado en el repositorio
 - [x] Ejecutar smoke SEC/XBRL con AAPL. — PASS: modo real AAPL 10-Q → SEC → pipeline → OpenRouter → 200, 7 métricas, verification válida
 - [x] Ejecutar smoke del handoff API/UI. — PASS: demo y real vía FastAPI; UI vía `AppTest`
-- [ ] Ejecutar smoke STT/TTS. — TTS PASS; STT NOT EXECUTED
+- [ ] Ejecutar smoke real STT/TTS en el entorno de presentación. — TTS histórico PASS; STT contractual cubierto por tests, smoke con Groq pendiente
 - [ ] Ejecutar la secuencia completa de `docs/demo/DEMO_CHECKLIST.md`. — NOT EXECUTED: pendiente de ensayo manual con navegador
 - [x] Revisar y actualizar el README con rutas/endpoints reales de Marco. — PASS
 - [x] Confirmar que ningún FakeLLM aparece etiquetado como modo real. — PASS: demo → `provider=fixture`, `model=null`; real → `provider=openrouter`

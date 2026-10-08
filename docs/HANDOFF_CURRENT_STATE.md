@@ -1,40 +1,57 @@
 # Current integrated state
 
-- Main integration commit: `d4acee6ab909d3e875877540f5bdc099a71559c6`
-  (the handoff note itself is a later documentation-only commit).
-- Integration branch: `integration/final-r12` at
-  `a62fd92e31f84b504c9794ca139dfc94fa684c2d`.
+This is the current operational handoff. Earlier R11/R12 checkpoints remain in
+Git history; they are not the current product baseline.
+
+- Functional audit base before this documentation-only reconciliation:
+  `6f336be9796ff616dcc277a3b2ef866761edd0e9`.
 - Certified R12.2 checkpoint: `44400bfd6add140cc50922b6fe64f1add061b05c`.
-- Validation: 517 tests passed with 4 dependency deprecation warnings;
+- Validation: **613 passed, 4 skipped, 0 failed, 4 warnings**;
   `compileall`, `pip check`, and `git diff --check` passed.
-- Architecture: SEC narrative and XBRL inputs feed deterministic loading,
-  chunking, BM25 retrieval and canonical metrics; a grounded structured LLM
-  selects deterministic evidence IDs; the backend reconstructs exact evidence,
-  applies deterministic verification, and exposes a serializable handoff to
-  FastAPI, Streamlit, and TTS.
+- The four skips are real Integrated Gradients tests that require `torch`,
+  which was absent from the audited local environment. The Docker image and
+  `requirements.txt` include PyTorch.
+- The current Cloud Run build/deployment workflow and health smoke succeeded.
 
-# Completed
+## Current architecture
 
-- R11 real-mode stabilization and live SEC filing discovery.
-- R12 professional UX and explicit real/demo behavior.
-- R12.1 presentation hardening.
-- R12.2 deterministic evidence catalog and `evidence_id` contract.
-- Backend-side exact evidence/source/section reconstruction.
-- At most one bounded content repair.
-- Total OpenRouter generation deadline, including transport retries.
-- Marco redesign integration: compatible dark-theme configuration retained;
-  legacy static catalog, legacy date contract, relaxed grounding, model
-  recommendation, and demo autoload were intentionally excluded.
+SEC narrative and XBRL inputs feed deterministic loading, SEC-aware chunking,
+BM25 retrieval, and seven canonical metrics. A structured LLM selects IDs from
+a deterministic evidence catalog; the backend reconstructs literal evidence,
+source, and section. FinBERT and Integrated Gradients enrich the grounded
+outlook before deterministic verification produces `AnalysisHandoff` for
+FastAPI, Streamlit/Plotly, filing chat, local Kokoro TTS, and optional Groq
+Orpheus TTS for English speech.
 
-# Pending
+The product UI has four result tabs—Overview, Financials, Narrative, and
+Sources—plus the floating **Ask about this filing** experience.
 
-- R13 grounded financial chat.
-- R14 STT voice copilot.
-- Final manual visual review and optional additional Marco styling port.
-- Final end-to-end presentation smoke and demo script/README polish.
-- Optional provider/model benchmark only if future evidence justifies it.
+## Completed
 
-Earnings-call STT is **not** integrated into the analysis pipeline. The current
-STT module can later provide voice input for grounded chat. Real mode never
-falls back silently to demo: it depends on SEC access and the configured
-OpenRouter provider/model. Demo remains explicitly synthetic and deterministic.
+- Real SEC filing discovery and distinct filing/report dates.
+- Seven canonical XBRL metrics, retrieval, structured analysis, grounding,
+  bounded one-shot repair, and deterministic verification.
+- Backend-side evidence/source/section reconstruction from `evidence_id`.
+- FinBERT financial sentiment and Integrated Gradients local explanation.
+- FastAPI, Streamlit, Plotly, explicit real/demo modes, and safe errors.
+- Grounded filing chat over verified handoff context.
+- Groq STT as voice input to chat, Kokoro as the default local TTS, and a
+  selectable Groq Orpheus path for English chat audio. Spanish speech routes
+  to Kokoro.
+- Multi-stage Docker image and Cloud Run deployment.
+
+## Current caveats and future work
+
+- Chat citations, abstention, and recommendation blocking are prompt-enforced;
+  there is no deterministic post-generation citation verifier yet.
+- STT feeds filing chat. Earnings-call audio/transcripts are **not** ingested
+  into the SEC retrieval/analysis pipeline.
+- Real mode depends on SEC and configured external providers and never falls
+  back silently to the deterministic synthetic demo.
+- Groq TTS sends normalized speech text to an external provider when selected;
+  a provider failure returns an error rather than falling back to Kokoro.
+- Product cost/latency measurements, enterprise retention/governance controls,
+  and the four skipped local IG tests remain open validation work.
+
+See [`BUSINESS_CASE.md`](BUSINESS_CASE.md) and
+[`COST_LATENCY.md`](COST_LATENCY.md) for the business and measurement status.

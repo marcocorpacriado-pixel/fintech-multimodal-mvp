@@ -146,7 +146,19 @@ from the TTS contract.
 The integration adapter does not import `src.audio`; this keeps Kokoro/Groq
 dependencies optional and owned by Cristian's module.
 
-## Cristian STT to future earnings-call retrieval
+The HTTP boundary also supports `provider="local"` (default, Kokoro) or
+`provider="groq"` on `POST /api/v1/audio/summary`. Groq uses
+`canopylabs/orpheus-v1-english` and requires `GROQ_API_KEY`; Spanish text is
+explicitly routed to a Kokoro Spanish voice. `GET /api/v1/audio/voices` accepts
+the same provider selector, while `X-TTS-Provider` and `X-TTS-Voice` report the
+engine and voice actually used. Provider failure is surfaced as a safe 503;
+there is no failure-triggered fallback from Groq to Kokoro.
+
+## Cristian STT and future earnings-call retrieval
+
+STT is currently integrated as voice input to filing chat through
+`POST /api/v1/audio/transcribe`. It does not feed earnings-call content into
+the SEC analysis pipeline.
 
 The future flow is intentionally additive:
 
@@ -229,9 +241,14 @@ never re-reads the filing, XBRL or retrieval output.
   `[stream interrupted]`.
 - **Voice:** `POST /api/v1/audio/transcribe` takes a raw `audio/wav` body
   (≤ 25 MB) and returns `{text, language}` via Cristian's Groq STT.
-  `POST /api/v1/audio/summary` now accepts an optional `language`. Without it,
-  the Kokoro language is derived from the voice prefix (`ef_*` → Spanish).
-- **UI:** the "Ask" tab maps cited tags to labels with
+  `POST /api/v1/audio/summary` accepts `provider`, `voice`, and an optional
+  `language`. The default provider is local Kokoro. Groq TTS is English-only;
+  Spanish text is routed to Kokoro rather than sent to Groq.
+- **UI:** the floating **Ask about this filing** panel maps cited tags to labels with
   `src.visualization.presentation.chat_citation_labels`, which mirrors
   `citation_index` and has a test to keep both in sync. It strips tags before
   TTS.
+
+Citation tags, abstention, and recommendation blocking in chat are enforced by
+the prompt. Unlike the core filing analysis, chat does not yet have a
+deterministic post-generation citation verifier.
