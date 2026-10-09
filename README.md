@@ -33,7 +33,7 @@ costes y tiempos está en [cost and latency](docs/COST_LATENCY.md).
   y verifier: integrados.
 - FinBERT e Integrated Gradients: integrados con degradación segura si el
   modelo local no está disponible.
-- FastAPI, Streamlit, Plotly y filing chat: integrados.
+- FastAPI, Dash, Plotly y filing chat: integrados.
 - Groq Whisper STT, Kokoro TTS local y Groq Orpheus TTS opcional: integrados.
 - Docker multi-stage y despliegue Cloud Run: validados.
 - Earnings-call audio como fuente del pipeline de análisis: **no implementado**.
@@ -60,7 +60,7 @@ flowchart TD
     IG --> Verifier[Deterministic verifier]
     Verifier --> Pipeline[AnalysisPipelineResult]
     Pipeline --> Handoff[AnalysisHandoff]
-    Handoff --> UI[Streamlit and Plotly]
+    Handoff --> UI[Dash and Plotly]
     Handoff --> TTS[TTS: Kokoro local or Groq Orpheus]
     Handoff --> Chat[Grounded filing chat]
     STT[Groq Whisper STT] --> Chat
@@ -76,7 +76,7 @@ no recalcula métricas y no llama directamente a modelos.
 |---|---|
 | Dani | SEC ingestion, loader, chunking, BM25, XBRL, métricas, LLM grounded, verifier e integration handoff |
 | Cristian | STT, TTS y contratos de audio |
-| Marco | FastAPI, Streamlit y visualización |
+| Marco | FastAPI, Dash y visualización |
 
 ## Interfaz de producto
 
@@ -105,7 +105,7 @@ claramente filing date de report period.
 | STT | Groq `whisper-large-v3-turbo` | Voz a pregunta de chat |
 | TTS local | Kokoro v1.0 ONNX, 82M | Audio local de summary/respuesta |
 | TTS remoto opcional | Groq `canopylabs/orpheus-v1-english` | Audio en inglés seleccionado explícitamente |
-| API/UI | FastAPI, Streamlit, Plotly | Orquestación y presentación |
+| API/UI | FastAPI, Dash, Plotly | Orquestación y presentación |
 
 ## Métricas canónicas
 
@@ -226,7 +226,7 @@ python -m pytest -q
 | `GROQ_API_KEY` | STT y Groq TTS opcional | Groq Whisper y Orpheus |
 | `KOKORO_MODEL_DIR` | No | Directorio local Kokoro |
 | `KOKORO_THREADS` | No | Override de hilos ONNX; por defecto usa la cuota disponible |
-| `API_URL` | No | Backend consumido por Streamlit |
+| `API_URL` | No | Backend consumido por la UI Dash |
 
 Usa variables de entorno o un `.env` local no versionado. Nunca hardcodees
 claves en código, documentación o imágenes.
@@ -239,8 +239,8 @@ Desde la raíz, en dos terminales con el entorno activo:
 # Terminal 1 — API; OpenAPI en http://localhost:8000/docs
 uvicorn src.api.main:app --reload --port 8000
 
-# Terminal 2 — UI en http://localhost:8501
-streamlit run app/streamlit_app.py
+# Terminal 2 — UI en http://localhost:8050
+python -m app.dash_app
 ```
 
 La UI usa `http://localhost:8000` por defecto. Configura `API_URL` si el
@@ -249,8 +249,10 @@ backend está en otra dirección.
 ## Docker
 
 La imagen multi-stage usa Python 3.12-slim, PyTorch CPU, usuario non-root y
-assets FinBERT/Kokoro baked. Arranca FastAPI internamente en 8000 y Streamlit
-en `$PORT` —8080 por defecto— y expone un healthcheck.
+assets FinBERT/Kokoro baked. Arranca FastAPI internamente en 8000 y la UI Dash
+(gunicorn) en `$PORT` —8080 por defecto— y expone un healthcheck. Dash sirve
+callbacks HTTP cortos, sin WebSocket: en Cloud Run (facturación por request)
+solo se paga mientras se atiende un callback, no por pestaña abierta.
 
 ```powershell
 docker build -t fintech-multimodal-mvp .

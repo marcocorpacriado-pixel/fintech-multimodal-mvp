@@ -107,14 +107,14 @@ flowchart TD
     IG --> Verify[Deterministic verifier]
     Verify --> Handoff[AnalysisHandoff]
     Handoff --> API[FastAPI]
-    API --> UI[Streamlit and Plotly]
+    API --> UI[Dash and Plotly]
     Handoff --> TTS[TTS: Kokoro local or Groq Orpheus]
     Handoff --> Chat[Grounded filing chat]
     STT[Groq Whisper STT] --> Chat
 ```
 
 The architecture separates business/model logic, integration contracts,
-FastAPI orchestration, and Streamlit presentation. The UI consumes the API and
+FastAPI orchestration, and Dash presentation. The UI consumes the API and
 does not call SEC, XBRL, retrieval, or model modules directly.
 
 ### Validation evidence
@@ -279,7 +279,7 @@ incident process.
   remains local and does not send synthesis text to an external TTS provider.
 - Analysis and chat content is sent to the configured OpenRouter provider when
   real LLM functionality is used.
-- Chat history is held in the current Streamlit session and resent with the
+- Chat history is held in the browser session (a Dash `dcc.Store`) and resent with the
   handoff on each stateless chat request.
 - A formal retention/deletion policy for audio, chat history, provider logs,
   and application logs has not yet been implemented.

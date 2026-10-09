@@ -24,7 +24,8 @@ pydub>=0.25.1
 # API and visualization
 fastapi
 uvicorn
-streamlit
+dash>=3.1,<4
+gunicorn
 plotly
 
 # Tests

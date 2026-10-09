@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # =============================================================================
-#  fintech-multimodal-mvp — imagen única (FastAPI + Streamlit)
+#  fintech-multimodal-mvp — imagen única (FastAPI + Dash)
 # =============================================================================
 #  Decisión clave: el modelo de Kokoro (~350 MB) se descarga DURANTE EL BUILD,
 #  no en runtime. En Cloud Run cada cold start arranca un contenedor nuevo con
@@ -160,7 +160,7 @@ USER appuser
 EXPOSE 8080
 
 # Cloud Run ignora HEALTHCHECK, pero es útil en local y en docker-compose.
-# Comprobamos $PORT (lo ocupa Streamlit, o la API en modo fallback), así vale
+# Comprobamos $PORT (lo ocupa Dash/gunicorn, o la API en modo fallback), así vale
 # para ambos modos sin saber cuál está activo.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD python -c "import socket,os; socket.create_connection(('127.0.0.1', int(os.environ['PORT'])), timeout=4).close()" || exit 1

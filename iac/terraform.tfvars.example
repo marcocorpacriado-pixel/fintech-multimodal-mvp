@@ -8,5 +8,3 @@ base_name          = "fintech-mvp"
 openrouter_model   = "anthropic/claude-sonnet-4.5"
 repo_iac_url       = "fintech-multimodal-mvp"
 github_repository  = "marcocorpacriado-pixel/fintech-multimodal-mvp"
-idle_timeout_seconds = 300 # 900 = 15 min; 0 desactiva la pausa por inactividad
-idle_warning_seconds = 30

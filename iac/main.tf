@@ -18,7 +18,7 @@ locals {
   # vCPUs del contenedor. KOKORO_THREADS se deriva de aquí: Cloud Run gen2 no
   # expone la cuota de CPU al proceso (os.sched_getaffinity devuelve 5-10
   # según el host), y ONNX Runtime con más hilos que vCPUs sufre throttling.
-  cpu_count  = 4
+  cpu_count  = 2
   memory_gib = 4
 }
 
@@ -53,9 +53,10 @@ module "cloudrun" {
 
     autoscaling = {
       min = 0
-      # max=1 evita el problema de Streamlit sin session affinity: todas las
-      # conexiones WebSocket caen en la misma instancia. Suficiente para la
-      # demo del máster; sube si esperas carga concurrente.
+      # La UI Dash es stateless (el estado de sesión vive en el navegador), así
+      # que no necesita session affinity y puede escalar. max=1 se mantiene por
+      # coste: la imagen carga Kokoro + FinBERT y la demo del máster no necesita
+      # más. Sube si esperas carga concurrente.
       max = 1
     }
 
@@ -69,9 +70,11 @@ module "cloudrun" {
 
       resources = {
         cpu               = "${local.cpu_count * 1000}m"
-        memory            = "${local.memory_gib * 1024}Mi" # Kokoro + Streamlit + FastAPI
+        memory            = "${local.memory_gib * 1024}Mi" # Kokoro + Dash + FastAPI
         startup_cpu_boost = true
-        cpu_idle          = true
+        # true = CPU solo mientras se atiende una request: la UI Dash (callbacks HTTP
+        # cortos) se factura por request, no por pestaña abierta.
+        cpu_idle = true
       }
 
       # PORT lo inyecta Cloud Run automáticamente (no se puede sobrescribir).
@@ -80,8 +83,6 @@ module "cloudrun" {
         { name = "KOKORO_MODEL_DIR", value = "/opt/kokoro" },
         { name = "OPENROUTER_MODEL", value = var.openrouter_model },
         { name = "KOKORO_THREADS", value = tostring(local.cpu_count) },
-        { name = "IDLE_TIMEOUT_SECONDS", value = tostring(var.idle_timeout_seconds) },
-        { name = "IDLE_WARNING_SECONDS", value = tostring(var.idle_warning_seconds) },
         # Service size, used to cost Cloud Run time in the Performance tab.
         { name = "CLOUD_RUN_VCPU", value = tostring(local.cpu_count) },
         { name = "CLOUD_RUN_MEMORY_GIB", value = tostring(local.memory_gib) },

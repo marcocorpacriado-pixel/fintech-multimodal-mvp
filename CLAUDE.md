@@ -24,7 +24,7 @@ coordinación explícita. No introducir llamadas a modelos en UI o visualizació
 3. `src/audio/`: STT/TTS de Cristian. El STT existe como módulo, pero aún no
    forma parte del pipeline de análisis.
 4. `src/api/`: orquestación FastAPI de Marco (demo explícito, real sin fallback).
-5. `src/visualization/` y `app/`: presentación Streamlit/Plotly de Marco, que
+5. `src/visualization/` y `app/`: presentación Dash/Plotly de Marco, que
    consume FastAPI solo por HTTP.
 
 En real mode, `filing_date` selecciona la presentación SEC. El `period` del
@@ -46,7 +46,7 @@ XBRL, ejecuta retrieval o llama directamente al LLM.
 - httpx para OpenRouter
 - pytest
 - Audio: groq, kokoro-onnx, soundfile, pydub, python-dotenv
-- API y presentación: FastAPI, Uvicorn, Streamlit, Plotly
+- API y presentación: FastAPI, Uvicorn, Dash (gunicorn en producción), Plotly
 
 Todas las dependencias están declaradas en `requirements.txt`. No versionar
 `.env`, datos SEC, modelos o audio.

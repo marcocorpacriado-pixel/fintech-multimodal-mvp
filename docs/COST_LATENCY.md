@@ -70,10 +70,10 @@ text, credentials, and authorization headers must not be retained.
 | OpenRouter transport retries | 2 retries / 3 attempts | CONFIGURED | Attempts remain inside one generation deadline. |
 | Content generations | maximum 2 | CONFIGURED | Initial generation plus at most one bounded repair. |
 | Default maximum content-generation budget | approximately 180 s | ESTIMATED UPPER BOUND | Two independent 90-second generation deadlines; local stages add time. |
-| Streamlit analysis HTTP timeout | 300 s | CONFIGURED | UI request budget, not expected duration. |
-| Streamlit chat read timeout | 120 s | CONFIGURED | Does not constitute a full provider benchmark. |
-| Streamlit STT timeout | 60 s | CONFIGURED | UI request budget. |
-| Streamlit TTS timeout | 300 s | CONFIGURED | Allows model load/cold start. |
+| Dash UI analysis HTTP timeout | 300 s | CONFIGURED | UI request budget, not expected duration. |
+| Dash UI chat read timeout | 120 s | CONFIGURED | Does not constitute a full provider benchmark. |
+| Dash UI STT timeout | 60 s | CONFIGURED | UI request budget. |
+| Dash UI TTS timeout | 300 s | CONFIGURED | Allows model load/cold start. |
 | Cloud Run request timeout | 600 s | CONFIGURED | Infrastructure ceiling. |
 | Groq upload limit | 25 MB | CONFIGURED | Capacity limit, not latency. |
 | Groq TTS chunk size | 200 characters | CONFIGURED | English text is split for the provider; not an observed performance figure. |
